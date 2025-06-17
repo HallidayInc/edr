@@ -26,6 +26,7 @@ members = [
     "crates/edr_common",
     "crates/edr_coverage",
     "crates/edr_defaults",
+    "crates/edr_deno",
     "crates/edr_eth",
     "crates/edr_gas_report",
     "crates/edr_instrument",

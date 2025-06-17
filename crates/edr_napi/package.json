@@ -34,6 +34,7 @@
     "./coverage": "./dist/src/ts/coverage.js"
   },
   "files": [
+    "*.node",
     "index.js",
     "index.d.ts",
     "dist/src/",

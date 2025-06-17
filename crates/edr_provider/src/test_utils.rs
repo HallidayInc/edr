@@ -40,6 +40,18 @@ pub fn create_test_config<HardforkT: Default>() -> ProviderConfig<HardforkT> {
     create_test_config_with(MinimalProviderConfig::local_with_accounts())
 }
 
+/// Constructs a test config with an optional fork configuration
+pub fn create_test_config_with_fork<HardforkT: Default>(
+    fork: Option<ForkConfig<HardforkT>>,
+) -> ProviderConfig<HardforkT> {
+    let config = if let Some(fork_config) = fork {
+        MinimalProviderConfig::fork_empty(fork_config)
+    } else {
+        MinimalProviderConfig::local_empty()
+    };
+    create_test_config_with(config)
+}
+
 /// Default base header overrides for replaying L1 blocks.
 pub fn l1_base_header_overrides(
     replay_header: &BlockHeader,
@@ -196,19 +208,24 @@ impl<HardforkT> MinimalProviderConfig<HardforkT> {
 pub fn create_test_config_with<HardforkT: Default>(
     config: MinimalProviderConfig<HardforkT>,
 ) -> ProviderConfig<HardforkT> {
-    let network = if let Some(fork_config) = config.fork {
-        fork_config.into()
+    let (network, initial_base_fee_per_gas) = if let Some(fork_config) = config.fork {
+        (fork_config.into(), None)
     } else {
-        LocalConfig {
-            genesis_blob_gas: Some(BlobGas {
-                gas_used: 0,
-                excess_gas: 0,
-            }),
-            // SAFETY: literal is non-zero
-            genesis_block_gas_limit: unsafe { NonZeroU64::new_unchecked(30_000_000) },
-            genesis_block_time: Some(SystemTime::now()),
-        }
-        .into()
+        (
+            LocalConfig {
+                genesis_blob_gas: Some(BlobGas {
+                    gas_used: 0,
+                    excess_gas: 0,
+                }),
+                // SAFETY: literal is non-zero
+                genesis_block_gas_limit: unsafe {
+                    NonZeroU64::new_unchecked(30_000_000)
+                },
+                genesis_block_time: Some(SystemTime::now()),
+            }
+            .into(),
+            Some(1_000_000_000),
+        )
     };
 
     ProviderConfig {
@@ -224,7 +241,7 @@ pub fn create_test_config_with<HardforkT: Default>(
         default_transaction_gas_limit: unsafe { NonZeroU64::new_unchecked(30_000_000) },
         genesis_state: config.genesis_state,
         hardfork: HardforkT::default(),
-        initial_base_fee_per_gas: Some(1000000000),
+        initial_base_fee_per_gas,
         initial_parent_beacon_block_root: Some(KECCAK_NULL_RLP),
         min_gas_price: 0,
         mining: MiningConfig {
