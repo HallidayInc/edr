@@ -848,6 +848,8 @@ export declare enum GasReportExecutionStatus {
   Halt = 2
 }
 
+export const ARB_CHAIN_TYPE: string
+export declare function arbChainProviderFactory(): ProviderFactory
 export const GENERIC_CHAIN_TYPE: string
 
 export declare function genericChainProviderFactory(): ProviderFactory

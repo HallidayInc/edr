@@ -1,0 +1,526 @@
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
+import { hmac } from "jsr:@noble/hashes/hmac.js";
+import { keccak_256 } from "jsr:@noble/hashes/sha3.js";
+import { sha256 } from "jsr:@noble/hashes/sha2.js";
+import { getPublicKey, hashes, sign } from "jsr:@noble/secp256k1";
+import { Context, Provider } from "../edr/mod.ts";
+
+hashes.sha256 ??= sha256;
+hashes.hmacSha256 ??= (key, message) => hmac(sha256, key, message);
+
+async function fetchRecentBlockNumber(url: string): Promise<bigint> {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "eth_blockNumber",
+            params: [],
+        }),
+    });
+    const json = await response.json();
+    return BigInt(json.result);
+}
+
+async function request(provider: Provider, req: { method: string, params: any[] }) {
+    const res = await provider.handleRequest(JSON.stringify({ id: 1, jsonrpc: "2.0", ...req }));
+    const parsed = JSON.parse(res.data);
+    if (parsed.result) {
+        return parsed.result;
+    } else {
+        throw new Error(JSON.stringify(parsed.error));
+    }
+}
+
+function hexToBytes(value: string) {
+    let normalized = value.replace(/^0x/, "");
+    if (normalized.length % 2 !== 0) {
+        normalized = `0${normalized}`;
+    }
+    const bytes = new Uint8Array(normalized.length / 2);
+    for (let i = 0; i < normalized.length; i += 2) {
+        bytes[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16);
+    }
+    return bytes;
+}
+
+function bytesToHex(value: Uint8Array) {
+    const hex = Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return `0x${hex.length === 0 ? "0" : hex}`;
+}
+
+function bigintToBytes(value: bigint) {
+    if (value === 0n) return new Uint8Array([]);
+    let hex = value.toString(16);
+    if (hex.length % 2 !== 0) hex = `0${hex}`;
+    return Uint8Array.from(hex.match(/.{1,2}/g)!.map((byte) => Number.parseInt(byte, 16)));
+}
+
+function addressFromPrivateKey(privateKey: Uint8Array) {
+    const publicKey = getPublicKey(privateKey, false).slice(1);
+    const hash = keccak_256(publicKey);
+    return bytesToHex(hash.slice(-20));
+}
+
+function rlpEncodeBytes(bytes: Uint8Array) {
+    if (bytes.length === 1 && bytes[0] < 0x80) {
+        return bytes;
+    }
+    if (bytes.length <= 55) {
+        return Uint8Array.from([0x80 + bytes.length, ...bytes]);
+    }
+    const lengthBytes = bigintToBytes(BigInt(bytes.length));
+    return Uint8Array.from([
+        0xb7 + lengthBytes.length,
+        ...lengthBytes,
+        ...bytes,
+    ]);
+}
+
+function rlpEncodeList(items: Uint8Array[]) {
+    const encodedItems = items.flatMap((item) => Array.from(rlpEncodeBytes(item)));
+    const payload = Uint8Array.from(encodedItems);
+    if (payload.length <= 55) {
+        return Uint8Array.from([0xc0 + payload.length, ...payload]);
+    }
+    const lengthBytes = bigintToBytes(BigInt(payload.length));
+    return Uint8Array.from([
+        0xf7 + lengthBytes.length,
+        ...lengthBytes,
+        ...payload,
+    ]);
+}
+
+function signAuthorization(
+    privateKey: Uint8Array,
+    chainId: bigint,
+    address: string,
+    nonce: bigint,
+) {
+    const addressBytes = hexToBytes(address);
+    const encoded = rlpEncodeList([
+        bigintToBytes(chainId),
+        addressBytes,
+        bigintToBytes(nonce),
+    ]);
+    const hash = keccak_256(new Uint8Array([0x05, ...encoded]));
+    const signature = sign(hash, privateKey, { prehash: false, format: "recovered" });
+    const r = signature.slice(1, 33);
+    const s = signature.slice(33, 65);
+    return {
+        chainId: bytesToHex(bigintToBytes(chainId)),
+        address,
+        nonce: bytesToHex(bigintToBytes(nonce)),
+        yParity: signature[0],
+        r: bytesToHex(r),
+        s: bytesToHex(s),
+    };
+}
+
+async function assertDelegationRestorable(options: {
+    rpcUrl: string;
+    chain: "l1" | "op";
+    chainId: bigint;
+    hardfork: string;
+    chains?: { chainId: bigint; hardforks: { blockNumber: number; specId: string }[] }[];
+}) {
+    const delegatedCode = "0xef01001234567890123456789012345678901234567890";
+    const senderKey = hexToBytes(
+        "0x59c6995e998f97a5a0044976faccf36a7b42d7b7b8a59d1c9adf3b7a7a33b5c5",
+    );
+    const sender = addressFromPrivateKey(senderKey);
+
+    using ctx = new Context();
+    using fork = ctx.createProvider({
+        chain: options.chain,
+        fork: {
+            jsonRpcUrl: options.rpcUrl,
+            blockNumber: await fetchRecentBlockNumber(options.rpcUrl),
+        },
+        chainId: options.chainId,
+        hardfork: options.hardfork,
+        chains: options.chains,
+        ownedAccounts: [
+            { secretKey: bytesToHex(senderKey), balance: 10n ** 20n },
+        ],
+    });
+
+    const originalCode = await request(fork, {
+        method: "eth_getCode",
+        params: [sender, "latest"],
+    });
+
+    const nonce1 = BigInt(await request(fork, {
+        method: "eth_getTransactionCount",
+        params: [sender, "latest"],
+    }));
+    const auth1 = signAuthorization(
+        senderKey,
+        options.chainId,
+        "0x1234567890123456789012345678901234567890",
+        nonce1 + 1n,
+    );
+    await request(fork, {
+        method: "eth_sendTransaction",
+        params: [
+            {
+                from: sender,
+                to: sender,
+                maxFeePerGas: "0x3b9aca00",
+                maxPriorityFeePerGas: "0x3b9aca00",
+                gas: "0xf618",
+                nonce: bytesToHex(bigintToBytes(nonce1)),
+                authorizationList: [auth1],
+            },
+        ],
+    });
+    const updatedCode = await request(fork, {
+        method: "eth_getCode",
+        params: [sender, "latest"],
+    });
+    assertEquals(updatedCode.toLowerCase(), delegatedCode.toLowerCase());
+
+    const nonce2 = BigInt(await request(fork, {
+        method: "eth_getTransactionCount",
+        params: [sender, "latest"],
+    }));
+    const auth2 = signAuthorization(
+        senderKey,
+        options.chainId,
+        "0x0000000000000000000000000000000000000000",
+        nonce2 + 1n,
+    );
+    await request(fork, {
+        method: "eth_sendTransaction",
+        params: [
+            {
+                from: sender,
+                to: sender,
+                maxFeePerGas: "0x3b9aca00",
+                maxPriorityFeePerGas: "0x3b9aca00",
+                gas: "0xf618",
+                nonce: bytesToHex(bigintToBytes(nonce2)),
+                authorizationList: [auth2],
+            },
+        ],
+    });
+    const restoredCode = await request(fork, {
+        method: "eth_getCode",
+        params: [sender, "latest"],
+    });
+    assertEquals(restoredCode.toLowerCase(), originalCode.toLowerCase());
+}
+
+Deno.test("manual cleanup works", async () => {
+    const ctx = new Context();
+    const provider = ctx.createProvider({ chain: "l1" });
+    try {
+        const req = { method: "eth_blockNumber", params: [] };
+        const res = await request(provider, req);
+        assert(res);
+    } finally {
+        provider.close();
+        ctx.close();
+    }
+    const req = { method: "eth_blockNumber", params: [] };
+    await assertRejects(() => request(provider, req));
+});
+
+Deno.test("cleanup on unload", () => {
+    const ctx = new Context();
+    ctx.createProvider({ chain: "l1" });
+});
+
+Deno.test("multiple providers work", async () => {
+    using ctx = new Context();
+    using p1 = ctx.createProvider({ chain: "l1" });
+    using p2 = ctx.createProvider({ chain: "l1" });
+
+    const req = { method: "eth_blockNumber", params: [] };
+    const r1 = await request(p1, req);
+    const r2 = await request(p2, req);
+    assertEquals(r1, r2);
+});
+
+Deno.test("logging callback works", async () => {
+    const logs: string[] = [];
+    using ctx = new Context();
+    using p = ctx.createProvider(
+        { chain: "l1" },
+        { printLineCallback: (msg) => logs.push(msg) },
+    );
+    await request(p, { method: "eth_blockNumber", params: [] });
+    assert(logs.length > 0);
+});
+
+Deno.test("decode logs callback", async () => {
+    const logs: Uint8Array[] = [];
+    using ctx = new Context();
+    using p = ctx.createProvider(
+        { chain: "l1" },
+        { decodeConsoleLogInputsCallback: (inputs) => logs.push(...inputs) },
+    );
+    await request(p, {
+        method: "eth_call",
+        params: [
+            {
+                to: "0x000000000000000000636F6e736f6c652e6c6f67",
+                data: "0x41304fac0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000568656c6c6f000000000000000000000000000000000000000000000000000000",
+            },
+            "latest",
+        ],
+    });
+    assert(logs.length > 0);
+});
+
+Deno.test("base fee changes by less than 12.5% between blocks", async () => {
+    const rpcUrl = "https://arb1.arbitrum.io/rpc";
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        fork: {
+            jsonRpcUrl: rpcUrl,
+            blockNumber: await fetchRecentBlockNumber(rpcUrl),
+        },
+        chainId: 42161,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 42161,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+    });
+
+    const blockBeforeMine = await request(arb, { method: "eth_getBlockByNumber", params: ["latest", false] });
+    const baseFeeBeforeMine = BigInt(blockBeforeMine.baseFeePerGas);
+    const blockNumberBeforeMine = BigInt(blockBeforeMine.number);
+
+    await request(arb, { method: "hardhat_mine", params: ["0x1"] });
+
+    const blockAfterMine = await request(arb, { method: "eth_getBlockByNumber", params: ["latest", false] });
+    const baseFeeAfterMine = BigInt(blockAfterMine.baseFeePerGas);
+
+    assertEquals(
+        BigInt(blockAfterMine.number),
+        blockNumberBeforeMine + 1n,
+        "expected hardhat_mine to advance the block number by one",
+    );
+
+    if (baseFeeBeforeMine === 0n) {
+        assertEquals(
+            baseFeeAfterMine,
+            0n,
+            "base fee should remain zero if the previous block's base fee was zero",
+        );
+    } else {
+        assert(
+            baseFeeAfterMine * 8n <= baseFeeBeforeMine * 9n,
+            `base fee increased by more than 12.5% between blocks: before=${baseFeeBeforeMine.toString()} after=${baseFeeAfterMine.toString()}`,
+        );
+        assert(
+            baseFeeAfterMine * 8n >= baseFeeBeforeMine * 7n,
+            `base fee decreased by more than 12.5% between blocks: before=${baseFeeBeforeMine.toString()} after=${baseFeeAfterMine.toString()}`,
+        );
+    }
+});
+
+Deno.test("genesis account balance", async () => {
+    using ctx = new Context();
+    using p = ctx.createProvider({
+        // no fork creates a local chain
+        ownedAccounts: [
+            {
+                secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+                balance: 1000n * 10n ** 18n,
+            },
+        ],
+    });
+    const accounts = await request(p, { method: "eth_accounts", params: [] });
+    assertEquals(accounts, ["0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"]);
+    const req = {
+        method: "eth_getBalance",
+        params: ["0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "latest"],
+    };
+    const res = await request(p, req);
+    assertEquals(BigInt(res), 1000n * 10n ** 18n);
+
+    const txHash = await request(p, {
+        method: "eth_sendTransaction" as any,
+        params: [
+            {
+                from: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+                to: "0x1234567890123456789012345678901234567890",
+                value: "0xDE0B6B3A7640000",
+                gas: "0x520800",
+            },
+        ],
+    });
+    assert(txHash);
+});
+
+Deno.test("chain id override", async () => {
+    using ctx = new Context();
+    using p = ctx.createProvider({ chain: "l1", chainId: 10n, networkId: 100n });
+
+    const cid = await request(p, { method: "eth_chainId", params: [] });
+    const nid = await request(p, { method: "net_version", params: [] });
+    assertEquals(cid, "0xa");
+    assertEquals(nid, "100");
+});
+
+Deno.test("arbitrum fork eth_call", async () => {
+    const rpcUrl = "https://arb1.arbitrum.io/rpc";
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        fork: {
+            jsonRpcUrl: rpcUrl,
+            blockNumber: await fetchRecentBlockNumber(rpcUrl),
+        },
+        chainId: 42161,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 42161,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+    });
+    const call = {
+        method: "eth_call",
+        params: [
+            {
+                to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
+                data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+            },
+            "latest",
+        ],
+    };
+    const bal = await request(arb, call);
+    assert(BigInt(bal) > 0n);
+});
+
+Deno.test("story fork eth_call", async () => {
+    const rpcUrl = "https://mainnet.storyrpc.io";
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "op",
+        fork: {
+            jsonRpcUrl: rpcUrl,
+            blockNumber: await fetchRecentBlockNumber(rpcUrl),
+        },
+        chainId: 1514n,
+        hardfork: "holocene",
+        chains: [{
+            chainId: 1514n,
+            hardforks: [{ blockNumber: 0, specId: "holocene" }],
+        }],
+    });
+    const call = {
+        method: "eth_call",
+        params: [
+            {
+                to: "0xF1815bd50389c46847f0Bda824eC8da914045D14",
+                data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+            },
+            "latest",
+        ],
+    };
+    const bal = await request(arb, call);
+    assert(BigInt(bal) > 0n);
+});
+
+Deno.test("sepolia fork block number", async () => {
+    using ctx = new Context();
+    using sepolia = ctx.createProvider({
+        fork: { jsonRpcUrl: "https://sepolia.gateway.tenderly.co" },
+    });
+    const block = await request(sepolia, { method: "eth_blockNumber", params: [] });
+    assert(BigInt(block) > 0n);
+});
+
+Deno.test("fork delegate code can be restored", async () => {
+    await assertDelegationRestorable({
+        rpcUrl: "https://arb1.arbitrum.io/rpc",
+        chain: "l1",
+        chainId: 31337n,
+        hardfork: "prague",
+    });
+});
+
+Deno.test("fork delegate code can be restored on base", async () => {
+    await assertDelegationRestorable({
+        rpcUrl: "https://mainnet.base.org",
+        chain: "op",
+        chainId: 8453n,
+        hardfork: "prague",
+        chains: [{
+            chainId: 8453n,
+            hardforks: [{ blockNumber: 0, specId: "prague" }],
+        }],
+    });
+});
+
+Deno.test("realish setup", async () => {
+    const config = {
+        allowBlocksWithSameTimestamp: true,
+        allowUnlimitedContractSize: true,
+        bailOnCallFailure: true,
+        bailOnTransactionFailure: true,
+        blockGasLimit: 16000000n,
+        chain: "arb",
+        chainId: 42161n,
+        chains: [],
+        fork: { jsonRpcUrl: "https://arb1.arbitrum.io/rpc" },
+        hardfork: "cancun",
+        minGasPrice: 0n,
+        networkId: 42161n,
+    };
+    const forkConfig = {
+        ...config.fork,
+        blockNumber: await fetchRecentBlockNumber(config.fork.jsonRpcUrl),
+    };
+    using ctx = new Context();
+    using arb = ctx.createProvider({ ...config, fork: forkConfig });
+    const call = {
+        method: "eth_call",
+        params: [
+            {
+                to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
+                data:
+                "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+            },
+            "latest",
+        ],
+    };
+    const bal = await request(arb, call);
+    assert(BigInt(bal) > 0n);
+});
+
+Deno.test("transaction logging details", async () => {
+    const logs: string[] = [];
+    using ctx = new Context();
+    using p = ctx.createProvider(
+        {
+            ownedAccounts: [
+                {
+                    secretKey:
+                        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+                    balance: 1000n * 10n ** 18n,
+                },
+            ],
+        },
+        { printLineCallback: (m) => logs.push(m) },
+    );
+    await request(p, {
+        method: "eth_sendTransaction" as any,
+        params: [
+            {
+                from: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+                to: "0x1234567890123456789012345678901234567890",
+                value: "0x1",
+                gas: "0x5208",
+            },
+        ],
+    });
+    assert(logs.some((l) => l.includes("From")));
+    assert(logs.some((l) => l.includes("To")));
+});

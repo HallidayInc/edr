@@ -1,5 +1,5 @@
 use edr_block_api::Block as _;
-use edr_chain_spec::{EvmSpecId, TransactionValidation};
+use edr_chain_spec::{EvmSpecId, EvmTransactionValidationError, TransactionValidation};
 use edr_eth::{fee_history::FeeHistoryResult, reward_percentile::RewardPercentile, BlockSpec};
 use edr_primitives::{U256, U64};
 use edr_runtime::{overrides::StateOverrides, transaction};
@@ -17,11 +17,13 @@ use crate::{
 
 pub fn handle_estimate_gas<
     ChainSpecT: SyncProviderSpec<
-        TimerT,
-        SignedTransaction: Default
-                               + TransactionMut
-                               + TransactionValidation<ValidationError: PartialEq>,
-    >,
+            TimerT,
+            SignedTransaction: Default
+                                   + TransactionMut
+                                   + TransactionValidation<
+                ValidationError: From<EvmTransactionValidationError> + PartialEq,
+            >,
+        > + edr_utils::GasEstimateAdjuster,
     TimerT: Clone + TimeSinceEpoch,
 >(
     data: &mut ProviderData<ChainSpecT, TimerT>,

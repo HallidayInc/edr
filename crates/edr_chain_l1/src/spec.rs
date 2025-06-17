@@ -264,3 +264,5 @@ impl RpcChainSpec for L1ChainSpec {
     type RpcTransaction = L1RpcTransactionWithSignature;
     type RpcTransactionRequest = L1RpcTransactionRequest;
 }
+
+impl edr_utils::GasEstimateAdjuster for L1ChainSpec {}
