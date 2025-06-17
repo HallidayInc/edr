@@ -113,5 +113,7 @@ Brewfile.lock.json
 
 # Benchmark
 benchmark-output.json
-
 .pnpm-store/
+
+bindings.json
+*.dylib

@@ -197,31 +197,26 @@ where
     }
 }
 
-/// Decodes the base fee params from Bytes considering op-stack extra-param spec
-pub fn decode_base_params(extra_data: &Bytes) -> ConstantBaseFeeParams {
-    let version = *extra_data
-        .first()
-        .expect("Extra data should have at least 1 byte for version");
-    match version {
-        DYNAMIC_BASE_FEE_PARAM_VERSION => {
-            let denominator_bytes: [u8; 4] = extra_data
-                .get(1..=4)
-                .expect("Extra data should have at least 9 bytes for dynamic base fee params")
-                .try_into()
-                .expect("The slice should be exactly 4 bytes");
+/// Decodes the base fee params from Bytes considering op-stack extra-param spec.
+///
+/// Returns `None` if the provided bytes do not match the known encoding. This can happen
+/// if a chain has not populated the post-Holocene extra data yet or is using a newer
+/// encoding version.
+pub fn decode_base_params(extra_data: &Bytes) -> Option<ConstantBaseFeeParams> {
+    let version = *extra_data.first()?;
 
-            let elasticity_bytes: [u8; 4] = extra_data
-                .get(5..=8)
-                .expect("Extra data should have at least 9 bytes for dynamic base fee params")
-                .try_into()
-                .expect("The slice should be exactly 4 bytes");
-
-                let max_change_denominator = u32::from_be_bytes(denominator_bytes).into();
-                let elasticity_multiplier = u32::from_be_bytes(elasticity_bytes).into();
-                ConstantBaseFeeParams{max_change_denominator, elasticity_multiplier}
-        }
-        _ => panic!(
-            "Unsupported base fee params version: {version}. Expected {DYNAMIC_BASE_FEE_PARAM_VERSION}."
-        )
+    if version != DYNAMIC_BASE_FEE_PARAM_VERSION {
+        return None;
     }
+
+    let denominator_bytes: [u8; 4] = extra_data.get(1..=4)?.try_into().ok()?;
+    let elasticity_bytes: [u8; 4] = extra_data.get(5..=8)?.try_into().ok()?;
+
+    let max_change_denominator = u32::from_be_bytes(denominator_bytes).into();
+    let elasticity_multiplier = u32::from_be_bytes(elasticity_bytes).into();
+
+    Some(ConstantBaseFeeParams {
+        max_change_denominator,
+        elasticity_multiplier,
+    })
 }

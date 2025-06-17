@@ -27,6 +27,7 @@ edr_signer.workspace = true
 edr_solidity = { path = "../edr_solidity" }
 edr_state_api.workspace = true
 edr_transaction.workspace = true
+edr_utils = { path = "../edr_utils" }
 log = { version = "0.4.17", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true

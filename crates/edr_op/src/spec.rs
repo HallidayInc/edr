@@ -26,14 +26,17 @@ use edr_evm_spec::{
     BlobExcessGasAndPrice, ChainHardfork, ChainSpec, EthHeaderConstants, EvmHaltReason, EvmSpecId,
     EvmTransactionValidationError, TransactionValidation,
 };
+#[cfg(feature = "napi")]
 use edr_napi_core::{
     napi,
     spec::{marshal_response_data, Response, SyncNapiSpec},
 };
 use edr_primitives::U256;
 use edr_provider::{time::TimeSinceEpoch, ProviderSpec, TransactionFailureReason};
+#[cfg(feature = "napi")]
 use edr_rpc_eth::jsonrpc;
 use edr_rpc_spec::RpcSpec;
+#[cfg(feature = "napi")]
 use edr_solidity::contract_decoder::ContractDecoder;
 use edr_state_api::StateDiff;
 use op_revm::{precompiles::OpPrecompiles, L1BlockInfo, OpEvm, OpSpecId};
@@ -247,8 +250,7 @@ pub(crate) fn op_base_fee_params_overrides(
         // For post-Holocene blocks, use the parent header extra_data to determine the
         // base fee parameters
         if parent_hardfork >= Hardfork::HOLOCENE {
-            let base_fee_params = decode_base_params(&parent_header.extra_data);
-            Some(BaseFeeParams::Constant(base_fee_params))
+            decode_base_params(&parent_header.extra_data).map(BaseFeeParams::Constant)
         } else {
             None
         }
@@ -259,6 +261,7 @@ impl EthHeaderConstants for OpChainSpec {
     const MIN_ETHASH_DIFFICULTY: u64 = 0;
 }
 
+#[cfg(feature = "napi")]
 impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for OpChainSpec {
     const CHAIN_TYPE: &'static str = crate::CHAIN_TYPE;
 

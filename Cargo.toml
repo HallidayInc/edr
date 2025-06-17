@@ -28,6 +28,8 @@ members = [
     "crates/edr_solidity_tests",
     "crates/edr_test_utils",
     "crates/edr_transaction",
+    "crates/edr_utils",
+    "crates/edr_deno",
     "crates/eips/1559",
     "crates/eips/2930",
     "crates/eips/4844",
@@ -205,32 +207,32 @@ foundry-fork-db = "0.16"
 ethers-contract-abigen = { version = "2.0.14", default-features = false }
 
 ## alloy
-alloy-consensus = { version = "1.0.22", default-features = false }
-alloy-contract = { version = "1.0.22", default-features = false }
-alloy-eips = { version = "1.0.22", default-features = false }
-alloy-genesis = { version = "1.0.22", default-features = false }
-alloy-json-rpc = { version = "1.0.22", default-features = false }
-alloy-network = { version = "1.0.22", default-features = false }
+alloy-consensus = { version = "1.0.41", default-features = false }
+alloy-contract = { version = "1.0.41", default-features = false }
+alloy-eips = { version = "1.0.41", default-features = false }
+alloy-genesis = { version = "1.0.41", default-features = false }
+alloy-json-rpc = { version = "1.0.41", default-features = false }
+alloy-network = { version = "1.0.41", default-features = false }
 alloy-node-bindings = { version = "0.13.0", default-features = false }
-alloy-provider = { version = "1.0.22", default-features = false }
-alloy-pubsub = { version = "1.0.22", default-features = false }
-alloy-rpc-client = { version = "1.0.22", default-features = false }
-alloy-rpc-types = { version = "1.0.22", default-features = false }
-alloy-serde = { version = "1.0.22", default-features = false }
-alloy-signer = { version = "1.0.22", default-features = false }
-alloy-signer-aws = { version = "1.0.22", default-features = false }
-alloy-signer-gcp = { version = "1.0.22", default-features = false }
-alloy-signer-ledger = { version = "1.0.22", default-features = false }
-alloy-signer-local = { version = "1.0.22", default-features = false }
-alloy-signer-trezor = { version = "1.0.22", default-features = false }
-alloy-transport = { version = "1.0.22", default-features = false }
-alloy-transport-http = { version = "1.0.22", default-features = false }
-alloy-transport-ipc = { version = "1.0.22", default-features = false }
-alloy-transport-ws = { version = "1.0.22", default-features = false }
+alloy-provider = { version = "1.0.41", default-features = false }
+alloy-pubsub = { version = "1.0.41", default-features = false }
+alloy-rpc-client = { version = "1.0.41", default-features = false }
+alloy-rpc-types = { version = "1.0.41", default-features = false }
+alloy-serde = { version = "1.0.41", default-features = false }
+alloy-signer = { version = "1.0.41", default-features = false }
+alloy-signer-aws = { version = "1.0.41", default-features = false }
+alloy-signer-gcp = { version = "1.0.41", default-features = false }
+alloy-signer-ledger = { version = "1.0.41", default-features = false }
+alloy-signer-local = { version = "1.0.41", default-features = false }
+alloy-signer-trezor = { version = "1.0.41", default-features = false }
+alloy-transport = { version = "1.0.41", default-features = false }
+alloy-transport-http = { version = "1.0.41", default-features = false }
+alloy-transport-ipc = { version = "1.0.41", default-features = false }
+alloy-transport-ws = { version = "1.0.41", default-features = false }
 
-alloy-dyn-abi = { version = "1.2.1", features = ["eip712"] }
-alloy-json-abi = "1.2.1"
-alloy-primitives = { version = "1.2.1", features = [
+alloy-dyn-abi = { version = "1.3.0", features = ["eip712"] }
+alloy-json-abi = "1.3.0"
+alloy-primitives = { version = "1.3.0", features = [
     "getrandom",
     "rand",
     "map-fxhash",
@@ -238,9 +240,9 @@ alloy-primitives = { version = "1.2.1", features = [
     "map-hashbrown",
     "map-indexmap",
 ] }
-alloy-sol-macro-expander = "1.2.1"
-alloy-sol-macro-input = "1.2.1"
-alloy-sol-types = "1.2.1"
+alloy-sol-macro-expander = "1.3.0"
+alloy-sol-macro-input = "1.3.0"
+alloy-sol-types = "1.3.0"
 syn-solidity = "=0.8.25"
 
 alloy-chains = "0.2.6"

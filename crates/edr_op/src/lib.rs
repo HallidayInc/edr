@@ -50,6 +50,15 @@ pub type InvalidHeader = revm_context_interface::result::InvalidHeader;
 /// OP Stack invalid transaction error.
 pub type InvalidTransaction = revm_context_interface::result::InvalidTransaction;
 
+// Apply a small buffer to eth_estimateGas on OP Stack chains.
+impl edr_utils::GasEstimateAdjuster for OpChainSpec {
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        // Single-pass robust buffer: add 100% or at least 10_000 gas
+        let buffer = estimate.max(10_000);
+        estimate.saturating_add(buffer)
+    }
+}
+
 /// Helper type for constructing an [`op_revm::L1BlockInfo`].
 ///
 /// This type duplicates [`op_revm::L1BlockInfo`] but excludes the private

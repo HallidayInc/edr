@@ -17,14 +17,14 @@ use crate::{
 
 pub fn handle_estimate_gas<
     ChainSpecT: SyncProviderSpec<
-        TimerT,
-        BlockEnv: Default,
-        SignedTransaction: Default
-                               + TransactionMut
-                               + TransactionValidation<
-            ValidationError: From<EvmTransactionValidationError> + PartialEq,
-        >,
-    >,
+            TimerT,
+            BlockEnv: Default,
+            SignedTransaction: Default
+                                   + TransactionMut
+                                   + TransactionValidation<
+                ValidationError: From<EvmTransactionValidationError> + PartialEq,
+            >,
+        > + edr_utils::GasEstimateAdjuster,
     TimerT: Clone + TimeSinceEpoch,
 >(
     data: &mut ProviderData<ChainSpecT, TimerT>,

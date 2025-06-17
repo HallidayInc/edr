@@ -7,23 +7,6 @@ permissions:
   contents: write
   id-token: write
 on:
-  push:
-    # pre-releases will be triggered in any of these branches
-    # production releases will only be triggered for `main`
-    branches:
-      - main
-      - prerelease
-      - hh2
-      - feat/solidity-tests
-    tags-ignore:
-      - "**"
-    paths-ignore:
-      - "**/*.md"
-      - LICENSE
-      - "**/*.gitignore"
-      - .editorconfig
-      - docs/**
-  pull_request: null
   workflow_dispatch:
 
 jobs:

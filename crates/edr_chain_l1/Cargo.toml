@@ -24,6 +24,7 @@ revm-context-interface.workspace = true
 revm-primitives.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+edr_utils.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

@@ -154,16 +154,16 @@ impl<
 
 impl<
         ChainSpecT: SyncProviderSpec<
-            TimerT,
-            BlockEnv: Clone + Default,
-            PooledTransaction: IsEip155,
-            SignedTransaction: Default
-                                   + TransactionMut
-                                   + TransactionType<Type: IsEip4844>
-                                   + TransactionValidation<
-                ValidationError: From<EvmTransactionValidationError> + PartialEq,
-            >,
-        >,
+                TimerT,
+                BlockEnv: Clone + Default,
+                PooledTransaction: IsEip155,
+                SignedTransaction: Default
+                                       + TransactionMut
+                                       + TransactionType<Type: IsEip4844>
+                                       + TransactionValidation<
+                    ValidationError: From<EvmTransactionValidationError> + PartialEq,
+                >,
+            > + edr_utils::GasEstimateAdjuster,
         TimerT: Clone + TimeSinceEpoch,
     > Provider<ChainSpecT, TimerT>
 {

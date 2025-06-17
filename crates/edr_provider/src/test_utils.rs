@@ -109,6 +109,12 @@ pub fn create_test_config_with_fork<HardforkT: Default>(
 
     let genesis_state = genesis_state_with_funded_owned_accounts(&owned_accounts, one_ether());
 
+    let initial_base_fee_per_gas = if fork.as_ref().is_some() {
+        None
+    } else {
+        Some(1_000_000_000)
+    };
+
     ProviderConfig {
         allow_blocks_with_same_timestamp: false,
         allow_unlimited_contract_size: false,
@@ -122,7 +128,7 @@ pub fn create_test_config_with_fork<HardforkT: Default>(
         fork,
         genesis_state,
         hardfork: HardforkT::default(),
-        initial_base_fee_per_gas: Some(1000000000),
+        initial_base_fee_per_gas,
         initial_blob_gas: Some(BlobGas {
             gas_used: 0,
             excess_gas: 0,

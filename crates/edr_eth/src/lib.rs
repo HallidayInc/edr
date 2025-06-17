@@ -19,4 +19,7 @@ pub mod serde;
 
 pub use c_kzg::{Blob, Bytes48};
 
+/// Ethereum Layer 1 chain types.
+pub use edr_chain_l1 as l1;
+
 pub use self::block_spec::{BlockSpec, BlockTag, Eip1898BlockSpec, PreEip1898BlockSpec};

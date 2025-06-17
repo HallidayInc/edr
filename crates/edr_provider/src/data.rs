@@ -2615,14 +2615,14 @@ where
 impl<ChainSpecT, TimerT> ProviderData<ChainSpecT, TimerT>
 where
     ChainSpecT: SyncProviderSpec<
-        TimerT,
-        BlockEnv: Default,
-        SignedTransaction: Default
-                               + TransactionMut
-                               + TransactionValidation<
-            ValidationError: From<EvmTransactionValidationError> + PartialEq,
-        >,
-    >,
+            TimerT,
+            BlockEnv: Default,
+            SignedTransaction: Default
+                                   + TransactionMut
+                                   + TransactionValidation<
+                ValidationError: From<EvmTransactionValidationError> + PartialEq,
+            >,
+        > + edr_utils::GasEstimateAdjuster,
     TimerT: Clone + TimeSinceEpoch,
 {
     /// Estimate the gas cost of a transaction. Matches Hardhat behavior.
@@ -2719,17 +2719,19 @@ where
                 trace_collector: &mut trace_collector,
             })?;
 
-            // Return the initial estimation if it was successful
+            // Return the initial estimation if it was successful, after applying
+            // chain-specific adjustment and clamping to the block gas limit.
             if success {
+                let adjusted = adjust_gas_estimate_for_chain::<ChainSpecT>(initial_estimation)
+                    .min(header.gas_limit);
                 return Ok(EstimateGasResult {
-                    estimation: initial_estimation,
+                    estimation: adjusted,
                     traces: trace_collector.into_traces(),
                 });
             }
 
-            // Correct the initial estimation if the transaction failed with the actually
-            // used gas limit. This can happen if the execution logic is based
-            // on the available gas.
+            // Correct the initial estimation if the transaction failed with the actually used gas limit.
+            // This can happen if the execution logic is based on the available gas.
             let estimation = gas::binary_search_estimation(BinarySearchEstimationArgs {
                 blockchain,
                 header,
@@ -2742,10 +2744,22 @@ where
                 trace_collector: &mut trace_collector,
             })?;
 
+            // Apply chain-specific adjustment and clamp to block gas limit.
+            let adjusted =
+                adjust_gas_estimate_for_chain::<ChainSpecT>(estimation).min(header.gas_limit);
+
             let traces = trace_collector.into_traces();
-            Ok(EstimateGasResult { estimation, traces })
+            Ok(EstimateGasResult {
+                estimation: adjusted,
+                traces,
+            })
         })?
     }
+}
+
+// Apply minimal OP-chain-specific adjustments to gas estimates.
+fn adjust_gas_estimate_for_chain<ChainSpecT: edr_utils::GasEstimateAdjuster>(estimate: u64) -> u64 {
+    ChainSpecT::adjust_estimate_gas(estimate)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -2937,16 +2951,18 @@ fn create_blockchain_and_state<
             if let Some(base_fee) = config.initial_base_fee_per_gas {
                 Some(base_fee)
             } else {
-                let previous_base_fee = blockchain
-                    .last_block()
-                    .map_err(CreationError::Blockchain)?
-                    .header()
-                    .base_fee_per_gas;
+                let last_block = blockchain.last_block().map_err(CreationError::Blockchain)?;
+                let header = last_block.header();
 
-                if previous_base_fee.is_none() {
+                if header.base_fee_per_gas.is_none() {
                     Some(DEFAULT_INITIAL_BASE_FEE_PER_GAS)
                 } else {
-                    None
+                    Some(ChainSpecT::next_base_fee_per_gas(
+                        header,
+                        config.chain_id,
+                        config.hardfork,
+                        config.base_fee_params.as_ref(),
+                    ))
                 }
             }
         } else {
@@ -3047,6 +3063,24 @@ fn create_blockchain_and_state<
         let block_time_offset_seconds =
             block_time_offset_seconds::<ChainSpecT, TimerT>(config, timer)?;
 
+        let next_block_base_fee_per_gas = if config.hardfork.into() >= EvmSpecId::LONDON {
+            let last_block = blockchain.last_block().map_err(CreationError::Blockchain)?;
+            let header = last_block.header();
+
+            if header.base_fee_per_gas.is_none() {
+                Some(DEFAULT_INITIAL_BASE_FEE_PER_GAS)
+            } else {
+                Some(ChainSpecT::next_base_fee_per_gas(
+                    header,
+                    config.chain_id,
+                    config.hardfork,
+                    config.base_fee_params.as_ref(),
+                ))
+            }
+        } else {
+            None
+        };
+
         Ok(BlockchainAndState {
             fork_metadata: None,
             rpc_client: None,
@@ -3057,7 +3091,7 @@ fn create_blockchain_and_state<
             prev_randao_generator,
             // For local blockchain the initial base fee per gas config option is incorporated as
             // part of the genesis block.
-            next_block_base_fee_per_gas: None,
+            next_block_base_fee_per_gas,
         })
     }
 }
@@ -3215,6 +3249,33 @@ mod tests {
         let transaction = fixture.impersonated_dummy_transaction()?;
 
         test_add_pending_transaction(&mut fixture, transaction)
+    }
+
+    #[test]
+    fn initializes_next_block_base_fee_from_last_block() -> anyhow::Result<()> {
+        let fixture = ProviderTestFixture::<L1ChainSpec>::new_local()?;
+
+        let last_block = fixture
+            .provider_data
+            .last_block()
+            .context("last block should be available")?;
+        let header = last_block.header();
+
+        let expected = L1ChainSpec::next_base_fee_per_gas(
+            header,
+            fixture.provider_data.chain_id(),
+            fixture.provider_data.hardfork(),
+            fixture.provider_data.base_fee_params.as_ref(),
+        );
+
+        let actual = fixture
+            .provider_data
+            .next_block_base_fee_per_gas()?
+            .expect("post-London chains must have a base fee");
+
+        assert_eq!(actual, expected);
+
+        Ok(())
     }
 
     #[test]
