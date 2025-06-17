@@ -164,7 +164,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
             let latest_block = latest_block(&provider)?;
 
-            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // assert that the block was built using the given configuration values
             assert_eq!(block_base_fee_params.max_change_denominator, 300);
@@ -199,7 +200,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
             let block = latest_block(&provider)?;
             assert_eq!(block.number, Some(1));
-            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // assert that the block was built using the given configuration values
             assert_eq!(block_base_fee_params.max_change_denominator, 300);
@@ -209,7 +211,8 @@ mod base_fee_params {
 
             let block = latest_block(&provider)?;
             assert_eq!(block.number, Some(2));
-            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // Header extra_data encodes base_fee_params values needed for calculating next
             // block. As this is the block number 2, and we configured new
@@ -231,7 +234,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
             let latest_block = latest_block(&provider)?;
 
-            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // Defaults to CANYON values since when creating a new local blockchain block
             // number will be 0, so the dynamic configs won't apply yet, and EDR
@@ -274,7 +278,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
 
             let latest_block = latest_block(&provider)?;
-            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // assert that the block was built using the given configuration values
             assert_eq!(block_base_fee_params.max_change_denominator, 300);
@@ -317,7 +322,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
             let block = latest_block(&provider)?;
             assert_eq!(block.number, Some(fork_block_number + 1));
-            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // assert that the block was built using the first configuration values
             assert_eq!(block_base_fee_params.max_change_denominator, 300);
@@ -327,7 +333,8 @@ mod base_fee_params {
 
             let block = latest_block(&provider)?;
             assert_eq!(block.number, Some(fork_block_number + 2));
-            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // Header extra_data encodes base_fee_params values needed for calculating next
             // block. As this is the block number `fork_block_number + 2`, and
@@ -357,7 +364,8 @@ mod base_fee_params {
             trigger_mining_block(&provider)?;
             let latest_block = latest_block(&provider)?;
 
-            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data);
+            let block_base_fee_params = edr_op::block::decode_base_params(&latest_block.extra_data)
+                .expect("block extra data should contain base fee params");
 
             // assert that the block was built using OP_MAINNET values
             // `first_dynamic_base_fee_activation` block number matches with the third base

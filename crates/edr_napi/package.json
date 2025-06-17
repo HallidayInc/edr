@@ -34,6 +34,7 @@
     "./solidity-tests": "./dist/src/ts/solidity_tests.js"
   },
   "files": [
+    "*.node",
     "index.js",
     "index.d.ts",
     "src/"

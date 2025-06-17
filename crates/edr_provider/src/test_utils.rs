@@ -40,6 +40,18 @@ pub fn create_test_config<HardforkT: Default>() -> ProviderConfig<HardforkT> {
     create_test_config_with(MinimalProviderConfig::local_with_accounts())
 }
 
+/// Constructs a test config with an optional fork configuration
+pub fn create_test_config_with_fork<HardforkT: Default>(
+    fork: Option<ForkConfig<HardforkT>>,
+) -> ProviderConfig<HardforkT> {
+    let config = if let Some(fork_config) = fork {
+        MinimalProviderConfig::fork_empty(fork_config)
+    } else {
+        MinimalProviderConfig::local_empty()
+    };
+    create_test_config_with(config)
+}
+
 /// Default base header overrides for replaying L1 blocks.
 pub fn l1_base_header_overrides(
     replay_header: &BlockHeader,
@@ -184,6 +196,12 @@ impl<HardforkT> MinimalProviderConfig<HardforkT> {
 pub fn create_test_config_with<HardforkT: Default>(
     config: MinimalProviderConfig<HardforkT>,
 ) -> ProviderConfig<HardforkT> {
+    let initial_base_fee_per_gas = if config.fork.as_ref().is_some() {
+        None
+    } else {
+        Some(1_000_000_000)
+    };
+
     ProviderConfig {
         allow_blocks_with_same_timestamp: false,
         allow_unlimited_contract_size: false,
@@ -197,7 +215,7 @@ pub fn create_test_config_with<HardforkT: Default>(
         fork: config.fork,
         genesis_state: config.genesis_state,
         hardfork: HardforkT::default(),
-        initial_base_fee_per_gas: Some(1000000000),
+        initial_base_fee_per_gas,
         initial_blob_gas: Some(BlobGas {
             gas_used: 0,
             excess_gas: 0,

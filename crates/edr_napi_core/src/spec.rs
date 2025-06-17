@@ -2,7 +2,7 @@ use core::fmt::Debug;
 
 use edr_chain_l1::L1ChainSpec;
 use edr_chain_spec::{HaltReasonTrait, TransactionValidation};
-use edr_generic::GenericChainSpec;
+use edr_generic::{ArbChainSpec, GenericChainSpec};
 use edr_provider::{
     time::TimeSinceEpoch, ProviderError, ProviderErrorForChainSpec, ResponseWithCallTraces,
     SyncProviderSpec,
@@ -139,6 +139,16 @@ impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for L1ChainSpec {
 
 impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for GenericChainSpec {
     const CHAIN_TYPE: &'static str = edr_generic::CHAIN_TYPE;
+
+    fn cast_response(
+        response: Result<ResponseWithCallTraces, ProviderErrorForChainSpec<Self>>,
+    ) -> napi::Result<Response> {
+        cast_provider_result_to_response(response)
+    }
+}
+
+impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for ArbChainSpec {
+    const CHAIN_TYPE: &'static str = edr_generic::ARB_CHAIN_TYPE;
 
     fn cast_response(
         response: Result<ResponseWithCallTraces, ProviderErrorForChainSpec<Self>>,

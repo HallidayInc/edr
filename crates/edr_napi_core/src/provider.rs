@@ -25,8 +25,10 @@ pub trait SyncProvider: Send + Sync {
     fn set_verbose_tracing(&self, enabled: bool);
 }
 
-impl<ChainSpecT: SyncNapiSpec<TimerT>, TimerT: Clone + TimeSinceEpoch> SyncProvider
-    for edr_provider::Provider<ChainSpecT, TimerT>
+impl<
+        ChainSpecT: SyncNapiSpec<TimerT> + edr_utils::GasEstimateAdjuster,
+        TimerT: Clone + TimeSinceEpoch,
+    > SyncProvider for edr_provider::Provider<ChainSpecT, TimerT>
 {
     fn handle_request(&self, request: String) -> napi::Result<Response> {
         let request = match serde_json::from_str(&request) {
