@@ -25,6 +25,7 @@ use edr_chain_spec_receipt::ReceiptChainSpec;
 use edr_chain_spec_rpc::{RpcBlockChainSpec, RpcChainSpec};
 use edr_eip1559::BaseFeeParams;
 use edr_eip7892::ScheduledBlobParams;
+#[cfg(feature = "napi")]
 use edr_napi_core::{
     napi,
     spec::{marshal_response_data, Response, SyncNapiSpec},
@@ -32,8 +33,8 @@ use edr_napi_core::{
 use edr_primitives::HashMap;
 use edr_provider::{time::TimeSinceEpoch, ProviderSpec, TransactionFailureReason};
 use edr_receipt::ExecutionReceiptChainSpec;
+#[cfg(feature = "napi")]
 use edr_rpc_eth::jsonrpc;
-use edr_solidity::contract_decoder::ContractDecoder;
 use edr_state_api::{StateDebug as _, StateDiff};
 use edr_state_persistent_trie::PersistentStateTrie;
 use op_revm::{precompiles::OpPrecompiles, L1BlockInfo, OpEvm};
@@ -264,9 +265,7 @@ pub(crate) fn op_base_fee_params_for_block(
     // For post-Holocene blocks, use the parent header extra_data to determine the
     // base fee parameters
     if parent_hardfork >= Hardfork::HOLOCENE {
-        Some(BaseFeeParams::Constant(decode_base_params(
-            &parent_header.extra_data,
-        )))
+        decode_base_params(&parent_header.extra_data).map(BaseFeeParams::Constant)
     } else {
         None
     }
@@ -334,6 +333,7 @@ impl ReceiptChainSpec for OpChainSpec {
     type Receipt = OpBlockReceipt;
 }
 
+
 impl RpcBlockChainSpec for OpChainSpec {
     type RpcBlock<Data>
         = edr_chain_l1::rpc::Block<Data>
@@ -369,6 +369,7 @@ impl<TimerT: Clone + TimeSinceEpoch> ProviderSpec<TimerT> for OpChainSpec {
     }
 }
 
+#[cfg(feature = "napi")]
 impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for OpChainSpec {
     const CHAIN_TYPE: &'static str = crate::CHAIN_TYPE;
 

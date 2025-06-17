@@ -1,6 +1,6 @@
-//! Utility types and functions used across the EDR codebase.
-
 #![warn(missing_docs)]
+
+//! Utility types and functions used across the EDR codebase.
 
 use std::sync::Arc;
 
@@ -8,6 +8,17 @@ use std::sync::Arc;
 pub mod random;
 /// Types related to the Rust type system.
 pub mod types;
+
+/// Hook for chain families to adjust gas estimates.
+/// Implement this on your chain spec to customize `eth_estimateGas` results
+/// without hardcoding chain IDs or introducing dependency cycles.
+pub trait GasEstimateAdjuster {
+    /// Adjusts an `eth_estimateGas` result (in gas units).
+    /// Default implementation returns the input unchanged.
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        estimate
+    }
+}
 
 /// Trait for casting an `Arc<T>` into an `Arc<Self>`.
 pub trait CastArcFrom<T: ?Sized> {

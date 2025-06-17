@@ -4,15 +4,7 @@
 name: Check that the PR has a changeset
 
 on:
-  pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - labeled
-      - unlabeled
+  workflow_dispatch:
 
 jobs:
   check-if-changeset:

@@ -1,4 +1,5 @@
 /// Types for the generic L1 Ethereum implementation.
+pub mod arb;
 pub mod generic;
 /// Types for L1 Ethereum implementation.
 pub mod l1;

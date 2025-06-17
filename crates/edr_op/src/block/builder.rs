@@ -257,54 +257,59 @@ fn define_op_withdrawals_root(
         state.account_storage_root(&L2_TO_L1_MESSAGE_PASSER_ADDRESS)
     }
 }
+
 /// Decodes the base fee params from Bytes considering op-stack extra-param spec
-pub fn decode_base_params(extra_data: &Bytes) -> ConstantBaseFeeParams {
-    let version = *extra_data
-        .first()
-        .expect("Extra data should have at least 1 byte for version");
+/// Returns None if the extra_data is not in the expected format
+pub fn decode_base_params(extra_data: &Bytes) -> Option<ConstantBaseFeeParams> {
+    let version = *extra_data.first()?;
+
     match version {
         HOLOCENE_BASE_FEE_PARAM_VERSION | JOVIAN_BASE_FEE_PARAM_VERSION => {
+            // Validate minimum length
+            if extra_data.len() < 9 {
+                return None;
+            }
+
             let denominator_bytes: [u8; 4] = extra_data
-                .get(1..=4)
-                .expect("Extra data should have at least 9 bytes for dynamic base fee params")
+                .get(1..=4)?
                 .try_into()
-                .expect("The slice should be exactly 4 bytes");
+                .ok()?;
 
             let elasticity_bytes: [u8; 4] = extra_data
-                .get(5..=8)
-                .expect("Extra data should have at least 9 bytes for dynamic base fee params")
+                .get(5..=8)?
                 .try_into()
-                .expect("The slice should be exactly 4 bytes");
+                .ok()?;
 
-                let max_change_denominator = u32::from_be_bytes(denominator_bytes).into();
-                let elasticity_multiplier = u32::from_be_bytes(elasticity_bytes).into();
-                ConstantBaseFeeParams{max_change_denominator, elasticity_multiplier}
+            let max_change_denominator = u32::from_be_bytes(denominator_bytes).into();
+            let elasticity_multiplier = u32::from_be_bytes(elasticity_bytes).into();
+            Some(ConstantBaseFeeParams{max_change_denominator, elasticity_multiplier})
         }
-        _ => panic!(
-            "Unsupported base fee params version: {version}. Maximum expected version: {JOVIAN_BASE_FEE_PARAM_VERSION}."
-        )
+        _ => None
     }
 }
 
 /// extract min base fee from block header extra data
+/// Returns None if the extra_data is not in the expected format
 pub fn decode_min_base_fee(extra_data: &Bytes) -> Option<u128> {
     let version = extra_data.first().cloned();
     match version {
         None| // For Holocene activation block the parent header extra data is empty
         Some(HOLOCENE_BASE_FEE_PARAM_VERSION) => None,
         Some(JOVIAN_BASE_FEE_PARAM_VERSION) => {
+            // Validate minimum length
+            if extra_data.len() < 17 {
+                return None;
+            }
+
             let min_base_fee_bytes: [u8; 8] = extra_data
-                .get(9..=16)
-                .expect("Extra data should have at least 17 bytes for dynamic base fee params")
+                .get(9..=16)?
                 .try_into()
-                .expect("The slice should be exactly 8 bytes");
+                .ok()?;
 
             let min_base_fee = u64::from_be_bytes(min_base_fee_bytes).into();
             Some(min_base_fee)
         },
-        _ => panic!(
-            "Unsupported base fee params version: {version:?}. Maximum expected version: {JOVIAN_BASE_FEE_PARAM_VERSION}."
-        )
+        _ => None // Invalid version, return None instead of panicking
 }
 }
 #[cfg(test)]

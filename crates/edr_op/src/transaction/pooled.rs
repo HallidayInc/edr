@@ -70,6 +70,11 @@ impl alloy_rlp::Decodable for OpPooledTransaction {
 
                 Ok(OpPooledTransaction::Eip4844(Eip4844::decode(buf)?))
             }
+            Eip7702::TYPE => {
+                buf.advance(1);
+
+                Ok(OpPooledTransaction::Eip7702(Eip7702::decode(buf)?))
+            }
             Deposit::TYPE => {
                 buf.advance(1);
 

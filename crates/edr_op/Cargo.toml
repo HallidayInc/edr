@@ -24,7 +24,10 @@ edr_eip1559.workspace = true
 edr_eip2930.workspace = true
 edr_eip7702.workspace = true
 edr_eip7892.workspace = true
-edr_napi_core.workspace = true
+edr_eth = { workspace = true, features = ["serde", "std"] }
+edr_evm.workspace = true
+edr_generic.workspace = true
+edr_napi_core = { workspace = true, optional = true }
 edr_primitives.workspace = true
 edr_provider.workspace = true
 edr_receipt.workspace = true
@@ -63,6 +66,8 @@ serial_test = "2.0.0"
 tokio = { version = "1.21.2", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
 
 [features]
+default = ["napi"]
+napi = ["dep:edr_napi_core"]
 test-remote = []
 test-utils = ["edr_provider/test-utils"]
 tracing = [

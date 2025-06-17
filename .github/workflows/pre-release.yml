@@ -1,9 +1,7 @@
 name: Open pre-release PR
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   pre-release:

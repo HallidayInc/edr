@@ -37,6 +37,7 @@ revm-primitives.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing = { workspace = true, optional = true }
+edr_utils.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true

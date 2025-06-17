@@ -47,6 +47,8 @@ export interface CallOverrideResult {
   result: Uint8Array
   shouldRevert: boolean
 }
+export const ARB_CHAIN_TYPE: string
+export declare function arbChainProviderFactory(): ProviderFactory
 export const GENERIC_CHAIN_TYPE: string
 export declare function genericChainProviderFactory(): ProviderFactory
 export const L1_CHAIN_TYPE: string
