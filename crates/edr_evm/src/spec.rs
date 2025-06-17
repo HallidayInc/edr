@@ -293,7 +293,9 @@ impl BlockEnvConstructor<PartialHeader> for BlockEnv {
                 |BlobGas { excess_gas, .. }| {
                     eip4844::BlobExcessGasAndPrice::new(*excess_gas, hardfork >= l1::SpecId::PRAGUE)
                 },
-            ),
+            ).or_else(|| {
+                Some(eip4844::BlobExcessGasAndPrice::new(0u64, false))
+            }),
         }
     }
 }
@@ -318,7 +320,9 @@ impl BlockEnvConstructor<block::Header> for BlockEnv {
                 |BlobGas { excess_gas, .. }| {
                     eip4844::BlobExcessGasAndPrice::new(*excess_gas, hardfork >= l1::SpecId::PRAGUE)
                 },
-            ),
+            ).or_else(|| {
+                Some(eip4844::BlobExcessGasAndPrice::new(0u64, false))
+            }),
         }
     }
 }
