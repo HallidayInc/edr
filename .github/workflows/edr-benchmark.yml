@@ -1,12 +1,6 @@
 name: EDR Benchmarks
 
 on:
-  push:
-    branches:
-      - "main"
-  pull_request:
-    branches:
-      - "**"
   workflow_dispatch:
 
 defaults:

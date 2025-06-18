@@ -22,12 +22,16 @@ use edr_evm::{
     BlockReceipts, EthLocalBlockForChainSpec, LocalCreationError, RemoteBlock,
     RemoteBlockConversionError, SyncBlock,
 };
+#[cfg(feature = "napi")]
 use edr_napi_core::{
     napi,
     spec::{marshal_response_data, Response, SyncNapiSpec},
 };
 use edr_provider::{time::TimeSinceEpoch, ProviderSpec, TransactionFailureReason};
-use edr_rpc_eth::{jsonrpc, spec::RpcSpec};
+#[cfg(feature = "napi")]
+use edr_rpc_eth::jsonrpc;
+use edr_rpc_eth::spec::RpcSpec;
+#[cfg(feature = "napi")]
 use edr_solidity::contract_decoder::ContractDecoder;
 use op_revm::{precompiles::OpPrecompiles, L1BlockInfo, OpEvm};
 use serde::{de::DeserializeOwned, Serialize};
@@ -206,6 +210,7 @@ impl EthHeaderConstants for OpChainSpec {
     const MIN_ETHASH_DIFFICULTY: u64 = 0;
 }
 
+#[cfg(feature = "napi")]
 impl<TimerT: Clone + TimeSinceEpoch> SyncNapiSpec<TimerT> for OpChainSpec {
     const CHAIN_TYPE: &'static str = crate::CHAIN_TYPE;
 
