@@ -1,0 +1,13 @@
+[package]
+name = "edr_deno"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+deno_bindgen = "0.8"
+mimalloc = { version = "0.1", default-features = false, features = ["local_dynamic_tls"] }
+
+# TODO: wire edr_napi_core and other crates when bindings are implemented
