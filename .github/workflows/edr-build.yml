@@ -1,4 +1,4 @@
-name: build-edr-napi
+name: build-edr-deno
 
 on: [push, pull_request, workflow_dispatch]
 
@@ -10,18 +10,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            node: linux-x64-gnu
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            node: linux-arm64-gnu
           - os: macos-14
             target: aarch64-apple-darwin
-            node: darwin-arm64
 
     runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -33,18 +34,18 @@ jobs:
         with:
           use-cross: true
           command: build
-          args: --target ${{ matrix.target }} --release -p edr_napi
+          args: --target ${{ matrix.target }} --release -p edr_deno
 
-      - name: Place prebuild
+      - name: Place artifact
         run: |
-          for f in target/${{ matrix.target }}/release/*edr_napi*.{node,so,dylib,dll}; do
-            [ -e "$f" ] && cp "$f" "crates/edr_napi/edr.${{ matrix.node }}.node" && break
+          for f in target/${{ matrix.target }}/release/libedr_deno*.{so,dylib,dll}; do
+            [ -e "$f" ] && cp "$f" "crates/edr_deno/edr/edr_deno.${{ matrix.target }}.${f##*.}" && break
           done
 
       - uses: actions/upload-artifact@v4
         with:
           name: prebuild-${{ matrix.target }}
-          path: crates/edr_napi/edr.${{ matrix.node }}.node
+          path: crates/edr_deno/edr/edr_deno.${{ matrix.target }}.*
           retention-days: 1
 
   pack:
@@ -57,20 +58,15 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: prebuild-*
-          path: crates/edr_napi
+          path: crates/edr_deno/edr
           merge-multiple: true
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Generate JS loader & typings
+      - name: Package artifacts
         run: |
-          cd crates/edr_napi
-          npx @napi-rs/cli build --release --dts inline
-          npm pack --pack-destination ../..
+          crate_version=$(grep '^version' crates/edr_deno/Cargo.toml | head -n1 | cut -d '"' -f2)
+          tar czf nomicfoundation-edr-deno-$crate_version.tgz crates/edr_deno/README.md crates/edr_deno/edr/mod.ts crates/edr_deno/edr/edr_deno.*
 
       - uses: actions/upload-artifact@v4
         with:
-          name: nomicfoundation-edr
-          path: nomicfoundation-edr-*.tgz
+          name: nomicfoundation-edr-deno
+          path: nomicfoundation-edr-deno-*.tgz

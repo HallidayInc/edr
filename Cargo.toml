@@ -11,6 +11,7 @@ members = [
     "crates/edr_solidity",
     "crates/edr_test_utils",
     "crates/edr_utils",
+    "crates/edr_deno",
     "crates/tools",
 ]
 resolver = "2"

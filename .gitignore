@@ -117,3 +117,5 @@ Brewfile.lock.json
 
 # Benchmark
 benchmark-output.json
+bindings.json
+*.dylib

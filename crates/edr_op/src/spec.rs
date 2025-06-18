@@ -16,6 +16,7 @@ use edr_evm::{
     state::Database,
     transaction::{TransactionError, TransactionErrorForChainSpec, TransactionValidation},
 };
+#[cfg(feature = "napi")]
 use edr_napi_core::{
     napi,
     spec::{Response, SyncNapiSpec, marshal_response_data},
@@ -164,6 +165,7 @@ impl EthHeaderConstants for OpChainSpec {
     const MIN_ETHASH_DIFFICULTY: u64 = 0;
 }
 
+#[cfg(feature = "napi")]
 impl SyncNapiSpec for OpChainSpec {
     const CHAIN_TYPE: &'static str = crate::CHAIN_TYPE;
 
