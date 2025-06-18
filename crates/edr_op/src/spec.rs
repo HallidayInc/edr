@@ -16,12 +16,16 @@ use edr_evm::{
     state::Database,
     transaction::{TransactionError, TransactionErrorForChainSpec, TransactionValidation},
 };
+#[cfg(feature = "napi")]
 use edr_napi_core::{
     napi,
     spec::{Response, SyncNapiSpec, marshal_response_data},
 };
 use edr_provider::{ProviderSpec, TransactionFailureReason, time::TimeSinceEpoch};
-use edr_rpc_eth::{jsonrpc, spec::RpcSpec};
+#[cfg(feature = "napi")]
+use edr_rpc_eth::jsonrpc;
+use edr_rpc_eth::spec::RpcSpec;
+#[cfg(feature = "napi")]
 use edr_solidity::contract_decoder::ContractDecoder;
 use op_revm::{L1BlockInfo, OpEvm, precompiles::OpPrecompiles};
 use serde::{Serialize, de::DeserializeOwned};
@@ -164,6 +168,7 @@ impl EthHeaderConstants for OpChainSpec {
     const MIN_ETHASH_DIFFICULTY: u64 = 0;
 }
 
+#[cfg(feature = "napi")]
 impl SyncNapiSpec for OpChainSpec {
     const CHAIN_TYPE: &'static str = crate::CHAIN_TYPE;
 

@@ -1,0 +1,38 @@
+[package]
+name = "edr_deno"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+deno_bindgen = "0.8"
+mimalloc = { version = "0.1", default-features = false, features = ["local_dynamic_tls"] }
+
+edr_provider = { path = "../edr_provider", features = ["test-utils"] }
+edr_eth = { path = "../edr_eth" }
+edr_solidity = { path = "../edr_solidity" }
+edr_rpc_client = { path = "../edr_rpc_client" }
+edr_op = { path = "../edr_op", default-features = false }
+edr_generic = { path = "../edr_generic" }
+edr_evm = { path = "../edr_evm" }
+tokio = { version = "1.21.2", features = ["rt-multi-thread"] }
+once_cell = "1.19"
+serde_json = "1.0"
+# colored log output
+ansi_term = { version = "0.12.1", default-features = false }
+# Needed for parsing configuration
+serde = { version = "1.0", features = ["derive"] }
+
+[target.x86_64-unknown-linux-gnu.dependencies]
+openssl-sys = { version = "0.9.93", features = ["vendored"] }
+
+[target.x86_64-unknown-linux-musl.dependencies]
+openssl-sys = { version = "0.9.93", features = ["vendored"] }
+
+[target.aarch64-unknown-linux-gnu.dependencies]
+openssl-sys = { version = "0.9.93", features = ["vendored"] }
+
+[target.aarch64-unknown-linux-musl.dependencies]
+openssl-sys = { version = "0.9.93", features = ["vendored"] }
