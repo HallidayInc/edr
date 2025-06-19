@@ -1,19 +1,28 @@
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use deno_bindgen::deno_bindgen;
-use once_cell::sync::{Lazy, OnceCell};
-use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}, num::NonZeroU64};
-use tokio::runtime::Runtime;
-use edr_provider::{Provider, test_utils, time::CurrentTime, Logger};
-use edr_eth::{l1::{self, L1ChainSpec}, U256, signature::{secret_key_from_str, DangerousSecretKeyStr}};
 use core::str::FromStr;
+use deno_bindgen::deno_bindgen;
+use edr_eth::{
+    U256,
+    l1::{self, L1ChainSpec},
+    signature::{DangerousSecretKeyStr, secret_key_from_str},
+};
 use edr_evm::hardfork::{self, l1 as l1_hardfork};
 use edr_generic::GenericChainSpec;
 use edr_op::{self, OpChainSpec};
-use edr_solidity::{contract_decoder::ContractDecoder, artifacts::BuildInfoConfig};
+use edr_provider::{Logger, Provider, test_utils, time::CurrentTime};
 use edr_rpc_client::jsonrpc;
+use edr_solidity::{artifacts::BuildInfoConfig, contract_decoder::ContractDecoder};
+use once_cell::sync::{Lazy, OnceCell};
 use serde::Deserialize;
+use std::{
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
+    sync::atomic::{AtomicU32, Ordering},
+    sync::{Arc, Mutex},
+};
+use tokio::runtime::Runtime;
 
 fn parse_l1_spec_id(name: &str) -> Option<l1::SpecId> {
     match name.to_ascii_lowercase().as_str() {
@@ -113,13 +122,13 @@ struct FfiLogger {
 }
 
 impl FfiLogger {
-    fn new(ptr: usize) -> Self {
+    fn new(ptr: usize, enabled: bool) -> Self {
         let callback = if ptr == 0 {
             None
         } else {
             Some(unsafe { std::mem::transmute::<usize, LogCallback>(ptr) })
         };
-        Self { enabled: true, callback }
+        Self { enabled, callback }
     }
 
     fn send(&self, message: &str, replace: bool) {
@@ -132,9 +141,7 @@ impl FfiLogger {
     }
 }
 
-impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT>
-    for FfiLogger
-{
+impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> for FfiLogger {
     type BlockchainError = edr_evm::blockchain::BlockchainErrorForChainSpec<ChainSpecT>;
 
     fn is_enabled(&self) -> bool {
@@ -184,7 +191,8 @@ impl Clone for ProviderEntry {
 }
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static PROVIDERS: Lazy<Mutex<HashMap<u32, ProviderEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static PROVIDERS: Lazy<Mutex<HashMap<u32, ProviderEntry>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static CONTEXTS: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
@@ -215,7 +223,7 @@ pub fn version() -> String {
 
 /// Creates a new provider within the provided context using the given JSON configuration.
 #[deno_bindgen]
-pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
+pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabled: u8) -> u32 {
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
         return 0;
     }
@@ -251,18 +259,23 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
                 Ok(b) => b,
                 Err(_) => return 0,
             };
-            out.push(edr_provider::config::OwnedAccount { secret_key: key, balance });
+            out.push(edr_provider::config::OwnedAccount {
+                secret_key: key,
+                balance,
+            });
         }
         out
     } else {
         Vec::new()
     };
 
-    let fork = opts.fork_url.map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
-        json_rpc_url: url,
-        block_number: opts.fork_block_number,
-        http_headers: None,
-    });
+    let fork = opts
+        .fork_url
+        .map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
+            json_rpc_url: url,
+            block_number: opts.fork_block_number,
+            http_headers: None,
+        });
     let runtime = runtime();
     let contract_decoder = match ContractDecoder::new(&BuildInfoConfig::default()) {
         Ok(d) => Arc::new(d),
@@ -304,18 +317,20 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
                     let mut activations = Vec::new();
                     for hf in &c.hardforks {
                         if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                        activations.push((hardfork::ForkCondition::Block(hf.block_number), spec));
+                            activations
+                                .push((hardfork::ForkCondition::Block(hf.block_number), spec));
                         }
                     }
                     if !activations.is_empty() {
-                        cfg.chains.insert(c.chain_id, hardfork::Activations::new(activations));
+                        cfg.chains
+                            .insert(c.chain_id, hardfork::Activations::new(activations));
                     }
                 }
             }
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<L1ChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb)),
+                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -353,7 +368,7 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<OpChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb)),
+                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -405,11 +420,13 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
                     let mut activations = Vec::new();
                     for hf in c.hardforks {
                         if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                        activations.push((hardfork::ForkCondition::Block(hf.block_number), spec));
+                            activations
+                                .push((hardfork::ForkCondition::Block(hf.block_number), spec));
                         }
                     }
                     if !activations.is_empty() {
-                        cfg.chains.insert(c.chain_id, hardfork::Activations::new(activations));
+                        cfg.chains
+                            .insert(c.chain_id, hardfork::Activations::new(activations));
                     }
                 }
             } else if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
@@ -418,7 +435,7 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<GenericChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb)),
+                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -448,37 +465,43 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
 
     match entry {
         ProviderEntry::L1(provider) => {
-            let req: edr_provider::requests::ProviderRequest<L1ChainSpec> = match serde_json::from_str(request) {
-                Ok(r) => r,
-                Err(e) => {
-                    let err = jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
-                    return serde_json::to_string(&err).unwrap();
-                }
-            };
+            let req: edr_provider::requests::ProviderRequest<L1ChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err =
+                            jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
             let result = provider.handle_request(req);
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
         ProviderEntry::Op(provider) => {
-            let req: edr_provider::requests::ProviderRequest<OpChainSpec> = match serde_json::from_str(request) {
-                Ok(r) => r,
-                Err(e) => {
-                    let err = jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
-                    return serde_json::to_string(&err).unwrap();
-                }
-            };
+            let req: edr_provider::requests::ProviderRequest<OpChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err =
+                            jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
             let result = provider.handle_request(req);
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
         ProviderEntry::Generic(provider) => {
-            let req: edr_provider::requests::ProviderRequest<GenericChainSpec> = match serde_json::from_str(request) {
-                Ok(r) => r,
-                Err(e) => {
-                    let err = jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
-                    return serde_json::to_string(&err).unwrap();
-                }
-            };
+            let req: edr_provider::requests::ProviderRequest<GenericChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err =
+                            jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
             let result = provider.handle_request(req);
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()

@@ -119,5 +119,3 @@ Brewfile.lock.json
 benchmark-output.json
 bindings.json
 deno.lock
-
-crates/edr_deno/bindings

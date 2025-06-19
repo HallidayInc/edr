@@ -38,12 +38,14 @@ constructor accepts a JSON string with the following optional fields:
 - `owned_accounts`: array of accounts to pre-fund in the genesis block with the
   fields `secret_key` and `balance`
 
-`Context.createProvider` also accepts an optional callback invoked for each log
-message:
+`Context.createProvider` also accepts an optional logger configuration:
 
 ```ts
-const provider = ctx.createProvider(config, (msg, replace) => {
-  console.log(msg);
+const provider = ctx.createProvider(config, {
+  printLineCallback: (msg, replace) => {
+    console.log(msg);
+  },
+  enable: true,
 });
 ```
 
@@ -52,15 +54,15 @@ Example:
 ```ts
 import { Context } from "./bindings/bindings.ts";
 
-const ctx = new Context();
-const provider = ctx.createProvider({
+using ctx = new Context();
+using provider = ctx.createProvider({
   chain: "op",
   fork_url: "https://base.llamarpc.com",
   block_gas_limit: 30_000_000,
 });
 
 // create a local chain with one funded account
-const local = ctx.createProvider({
+using local = ctx.createProvider({
   owned_accounts: [
     {
       secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -70,7 +72,7 @@ const local = ctx.createProvider({
 });
 
 // fork Arbitrum and query a contract
-const arb = ctx.createProvider({
+using arb = ctx.createProvider({
   chain: "generic",
   fork_url: "https://arb1.arbitrum.io/rpc",
   chain_id: 42161,
@@ -99,3 +101,7 @@ const call = JSON.stringify({
 });
 const res = await arb.handleRequest(JSON.parse(call));
 ```
+
+Both `Context` and `Provider` implement synchronous and asynchronous disposers,
+so you can use them with JavaScript's `using` syntax and the resources will be
+freed automatically when the block exits.

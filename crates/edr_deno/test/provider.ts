@@ -7,24 +7,22 @@ Deno.test("version exports a string", () => {
 });
 
 Deno.test("multiple providers work", async () => {
-  const ctx = new Context();
-  const p1 = ctx.createProvider({ chain: "l1" });
-  const p2 = ctx.createProvider({ chain: "l1" });
+  using ctx = new Context();
+  using p1 = ctx.createProvider({ chain: "l1" });
+  using p2 = ctx.createProvider({ chain: "l1" });
 
   const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
   const r1 = await p1.handleRequest(req) as any;
   const r2 = await p2.handleRequest(req) as any;
   assert("result" in r1);
   assertEquals(r1.result, r2.result);
-  p1.close();
-  p2.close();
-  ctx.close();
+  // resources cleaned up by using
 });
 
 Deno.test("logging callback works", async () => {
-  const ctx = new Context();
+  using ctx = new Context();
   const logs: string[] = [];
-  const p = ctx.createProvider({ chain: "l1" }, (msg) => logs.push(msg));
+  using p = ctx.createProvider({ chain: "l1" }, { printLineCallback: (msg) => logs.push(msg) });
   await p.handleRequest({
     id: 1,
     jsonrpc: "2.0",
@@ -32,13 +30,12 @@ Deno.test("logging callback works", async () => {
     params: [],
   });
   assert(logs.length > 0);
-  p.close();
-  ctx.close();
+  // disposed automatically
 });
 
 Deno.test("genesis account balance", async () => {
-  const ctx = new Context();
-  const p = ctx.createProvider({
+  using ctx = new Context();
+  using p = ctx.createProvider({
     owned_accounts: [
       {
         secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
@@ -54,13 +51,12 @@ Deno.test("genesis account balance", async () => {
   };
   const res = await p.handleRequest(req) as any;
   assertEquals(res.result.toLowerCase(), "0xde0b6b3a7640000");
-  p.close();
-  ctx.close();
+  // auto dispose
 });
 
 Deno.test("arbitrum fork eth_call", async () => {
-  const ctx = new Context();
-  const arb = ctx.createProvider({
+  using ctx = new Context();
+  using arb = ctx.createProvider({
     chain: "generic",
     fork_url: "https://arb1.arbitrum.io/rpc",
     chain_id: 42161,
@@ -82,6 +78,5 @@ Deno.test("arbitrum fork eth_call", async () => {
   const res = await arb.handleRequest(call) as any;
   const bal = BigInt(res.result);
   assert(bal > 0n);
-  arb.close();
-  ctx.close();
+  // automatically disposed
 });
