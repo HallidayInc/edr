@@ -26,6 +26,15 @@ constructor accepts a JSON string with the following optional fields:
 - `chain_id`: override the provider's chain ID
 - `hardfork`: starting hardfork for the chain
 - `chains`: array of chain configurations with custom hardfork activations
+- `allow_unlimited_contract_size`: allow deploying contracts larger than the
+  usual limit
+- `allow_blocks_with_same_timestamp`: permit mining blocks with duplicate
+  timestamps
+- `bail_on_call_failure`: return an error when `eth_call` fails
+- `bail_on_transaction_failure`: return an error when a transaction fails
+- `block_gas_limit`: override the block gas limit
+- `min_gas_price`: minimum gas price for the next block
+- `network_id`: set the network ID separately from `chain_id`
 
 Example:
 
@@ -36,6 +45,7 @@ const ctx = context_new();
 const provider = provider_new(ctx, JSON.stringify({
   chain: "op",
   fork_url: "https://base.llamarpc.com",
+  block_gas_limit: 30_000_000,
 }));
 
 // fork Arbitrum and query a contract
@@ -44,6 +54,7 @@ const arb = provider_new(ctx, JSON.stringify({
   fork_url: "https://arb1.arbitrum.io/rpc",
   chain_id: 42161,
   hardfork: "cancun",
+  bail_on_call_failure: true,
   chains: [
     {
       chain_id: 42161,

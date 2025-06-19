@@ -3,7 +3,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use deno_bindgen::deno_bindgen;
 use once_cell::sync::{Lazy, OnceCell};
-use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}};
+use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}, num::NonZeroU64};
 use tokio::runtime::Runtime;
 use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
 use edr_eth::l1::{self, L1ChainSpec};
@@ -64,7 +64,21 @@ struct ProviderOptions {
     #[serde(default)]
     hardfork: Option<String>,
     #[serde(default)]
-    chains: Option<Vec<ChainConfig>>,    
+    chains: Option<Vec<ChainConfig>>,
+    #[serde(default)]
+    allow_unlimited_contract_size: Option<bool>,
+    #[serde(default)]
+    allow_blocks_with_same_timestamp: Option<bool>,
+    #[serde(default)]
+    bail_on_call_failure: Option<bool>,
+    #[serde(default)]
+    bail_on_transaction_failure: Option<bool>,
+    #[serde(default)]
+    block_gas_limit: Option<u64>,
+    #[serde(default)]
+    min_gas_price: Option<u128>,
+    #[serde(default)]
+    network_id: Option<u64>,
     #[serde(default)]
     chain: Chain,
 }
@@ -142,6 +156,13 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             chain_id: None,
             hardfork: None,
             chains: None,
+            allow_unlimited_contract_size: None,
+            allow_blocks_with_same_timestamp: None,
+            bail_on_call_failure: None,
+            bail_on_transaction_failure: None,
+            block_gas_limit: None,
+            min_gas_price: None,
+            network_id: None,
             chain: Chain::L1,
         },
     };
@@ -159,6 +180,29 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
     let entry = match opts.chain {
         Chain::L1 => {
             let mut cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
             if let Some(ref name) = opts.hardfork {
                 if let Some(spec) = parse_l1_spec_id(name) {
                     cfg.hardfork = spec;
@@ -190,7 +234,30 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             }
         }
         Chain::Op => {
-            let cfg = test_utils::create_test_config_with_fork::<edr_op::OpSpecId>(fork);
+            let mut cfg = test_utils::create_test_config_with_fork::<edr_op::OpSpecId>(fork);
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
             match Provider::<OpChainSpec>::new(
                 runtime.handle().clone(),
                 Box::new(NoopLogger::<OpChainSpec>::default()),
@@ -205,12 +272,35 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
         }
         Chain::Generic => {
             let mut cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 cfg.network_id = id;
             } else {
                 cfg.chain_id = 42161;
                 cfg.network_id = 42161;
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
             }
             if let Some(ref name) = opts.hardfork {
                 if let Some(spec) = parse_l1_spec_id(name) {
