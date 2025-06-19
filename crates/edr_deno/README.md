@@ -38,6 +38,15 @@ constructor accepts a JSON string with the following optional fields:
 - `owned_accounts`: array of accounts to pre-fund in the genesis block with the
   fields `secret_key` and `balance`
 
+`Context.createProvider` also accepts an optional callback invoked for each log
+message:
+
+```ts
+const provider = ctx.createProvider(config, (msg, replace) => {
+  console.log(msg);
+});
+```
+
 Example:
 
 ```ts

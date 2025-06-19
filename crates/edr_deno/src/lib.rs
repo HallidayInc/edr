@@ -5,7 +5,7 @@ use deno_bindgen::deno_bindgen;
 use once_cell::sync::{Lazy, OnceCell};
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}, num::NonZeroU64};
 use tokio::runtime::Runtime;
-use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
+use edr_provider::{Provider, test_utils, time::CurrentTime, Logger};
 use edr_eth::{l1::{self, L1ChainSpec}, U256, signature::{secret_key_from_str, DangerousSecretKeyStr}};
 use core::str::FromStr;
 use edr_evm::hardfork::{self, l1 as l1_hardfork};
@@ -104,6 +104,69 @@ struct OwnedAccount {
     balance: String,
 }
 
+type LogCallback = extern "C" fn(*const u8, usize, u8);
+
+#[derive(Clone)]
+struct FfiLogger {
+    enabled: bool,
+    callback: Option<LogCallback>,
+}
+
+impl FfiLogger {
+    fn new(ptr: usize) -> Self {
+        let callback = if ptr == 0 {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute::<usize, LogCallback>(ptr) })
+        };
+        Self { enabled: true, callback }
+    }
+
+    fn send(&self, message: &str, replace: bool) {
+        if self.enabled {
+            if let Some(cb) = self.callback {
+                let bytes = message.as_bytes();
+                cb(bytes.as_ptr(), bytes.len(), replace as u8);
+            }
+        }
+    }
+}
+
+impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT>
+    for FfiLogger
+{
+    type BlockchainError = edr_evm::blockchain::BlockchainErrorForChainSpec<ChainSpecT>;
+
+    fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn set_is_enabled(&mut self, is_enabled: bool) {
+        self.enabled = is_enabled;
+    }
+
+    fn print_contract_decoding_error(
+        &mut self,
+        error: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.send(error, false);
+        Ok(())
+    }
+
+    fn print_method_logs(
+        &mut self,
+        method: &str,
+        error: Option<&edr_provider::ProviderErrorForChainSpec<ChainSpecT>>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(err) = error {
+            self.send(&format!("{method}: {}", err), false);
+        } else {
+            self.send(method, false);
+        }
+        Ok(())
+    }
+}
+
 enum ProviderEntry {
     L1(Arc<Provider<L1ChainSpec>>),
     Op(Arc<Provider<OpChainSpec>>),
@@ -152,7 +215,7 @@ pub fn version() -> String {
 
 /// Creates a new provider within the provided context using the given JSON configuration.
 #[deno_bindgen]
-pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
+pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize) -> u32 {
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
         return 0;
     }
@@ -252,7 +315,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<L1ChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(NoopLogger::<L1ChainSpec>::default()),
+                Box::new(FfiLogger::new(log_cb)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -290,7 +353,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<OpChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(NoopLogger::<OpChainSpec>::default()),
+                Box::new(FfiLogger::new(log_cb)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -355,7 +418,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<GenericChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(NoopLogger::<GenericChainSpec>::default()),
+                Box::new(FfiLogger::new(log_cb)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,

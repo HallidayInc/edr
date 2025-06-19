@@ -3,7 +3,7 @@ const dylib = Deno.dlopen(libPath, {
   context_new: { parameters: [], result: 'u32' },
   context_drop: { parameters: ['u32'], result: 'void' },
   version: { parameters: [], result: 'pointer' },
-  provider_new: { parameters: ['u32', 'pointer', 'usize'], result: 'u32' },
+  provider_new: { parameters: ['u32', 'pointer', 'usize', 'pointer'], result: 'u32' },
   provider_handle_request: { parameters: ['u32', 'pointer', 'usize'], result: 'pointer' },
   provider_set_verbose_tracing: { parameters: ['u32', 'u8'], result: 'void' },
   provider_drop: { parameters: ['u32'], result: 'void' },
@@ -36,10 +36,15 @@ export function version(): string {
   return decode(ptr);
 }
 
-export function provider_new(ctx: number, config: string): number {
+export function provider_new(
+  ctx: number,
+  config: string,
+  logCb: Deno.PointerValue | null,
+): number {
   const data = encode(config);
   const ptr = Deno.UnsafePointer.of(data);
-  return dylib.symbols.provider_new(ctx, ptr, BigInt(data.length));
+  const cb = logCb ?? null;
+  return dylib.symbols.provider_new(ctx, ptr, BigInt(data.length), cb);
 }
 
 export async function provider_handle_request(id: number, req: string): Promise<string> {
@@ -71,9 +76,26 @@ export class Context {
     this.#id = context_new();
     ctxFinalizer.register(this, this.#id);
   }
-  createProvider(config: Record<string, unknown>): Provider {
-    const id = provider_new(this.#id, JSON.stringify(config));
-    return new Provider(id);
+  createProvider(
+    config: Record<string, unknown>,
+    onLog?: (msg: string, replace: boolean) => void,
+  ): Provider {
+    let callbackPtr: Deno.PointerValue | null = null;
+    let callback: Deno.UnsafeCallback | null = null;
+    if (onLog) {
+      callback = new Deno.UnsafeCallback({
+        parameters: ['pointer', 'usize', 'u8'] as const,
+        result: 'void' as const,
+      }, (ptr: Deno.PointerValue, len: bigint, replace: number) => {
+        const view = new Deno.UnsafePointerView(ptr!);
+        const bytes = new Uint8Array(view.getArrayBuffer(Number(len)));
+        const msg = new TextDecoder().decode(bytes);
+        onLog(msg, !!replace);
+      }) as unknown as Deno.UnsafeCallback;
+      callbackPtr = callback!.pointer;
+    }
+    const id = provider_new(this.#id, JSON.stringify(config), callbackPtr);
+    return new Provider(id, callback);
   }
   close() {
     ctxFinalizer.unregister(this);
@@ -83,8 +105,10 @@ export class Context {
 
 export class Provider {
   #id: number;
-  constructor(id: number) {
+  #callback: Deno.UnsafeCallback | null;
+  constructor(id: number, cb: Deno.UnsafeCallback | null) {
     this.#id = id;
+    this.#callback = cb;
     providerFinalizer.register(this, this.#id);
   }
   async handleRequest(req: unknown): Promise<unknown> {
@@ -97,5 +121,6 @@ export class Provider {
   close() {
     providerFinalizer.unregister(this);
     provider_drop(this.#id);
+    if (this.#callback) this.#callback.close();
   }
 }

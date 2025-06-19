@@ -12,12 +12,27 @@ Deno.test("multiple providers work", async () => {
   const p2 = ctx.createProvider({ chain: "l1" });
 
   const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
-  const r1 = await p1.handleRequest(req);
-  const r2 = await p2.handleRequest(req);
+  const r1 = await p1.handleRequest(req) as any;
+  const r2 = await p2.handleRequest(req) as any;
   assert("result" in r1);
   assertEquals(r1.result, r2.result);
   p1.close();
   p2.close();
+  ctx.close();
+});
+
+Deno.test("logging callback works", async () => {
+  const ctx = new Context();
+  const logs: string[] = [];
+  const p = ctx.createProvider({ chain: "l1" }, (msg) => logs.push(msg));
+  await p.handleRequest({
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_blockNumber",
+    params: [],
+  });
+  assert(logs.length > 0);
+  p.close();
   ctx.close();
 });
 
@@ -37,7 +52,7 @@ Deno.test("genesis account balance", async () => {
     method: "eth_getBalance",
     params: ["0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "latest"],
   };
-  const res = await p.handleRequest(req);
+  const res = await p.handleRequest(req) as any;
   assertEquals(res.result.toLowerCase(), "0xde0b6b3a7640000");
   p.close();
   ctx.close();
@@ -64,7 +79,7 @@ Deno.test("arbitrum fork eth_call", async () => {
       "latest",
     ],
   };
-  const res = await arb.handleRequest(call);
+  const res = await arb.handleRequest(call) as any;
   const bal = BigInt(res.result);
   assert(bal > 0n);
   arb.close();
