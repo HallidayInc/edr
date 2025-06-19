@@ -35,6 +35,7 @@ constructor accepts a JSON string with the following optional fields:
 - `block_gas_limit`: override the block gas limit
 - `min_gas_price`: minimum gas price for the next block
 - `network_id`: set the network ID separately from `chain_id`
+- `cache_dir`: directory used to cache RPC responses
 - `owned_accounts`: array of accounts to pre-fund in the genesis block with the
   fields `secret_key` and `balance`
 
@@ -44,6 +45,9 @@ constructor accepts a JSON string with the following optional fields:
 const provider = ctx.createProvider(config, {
   printLineCallback: (msg, replace) => {
     console.log(msg);
+  },
+  decodeConsoleLogInputsCallback: (data) => {
+    console.log("console.log:", new TextDecoder().decode(data));
   },
   enable: true,
 });
@@ -104,4 +108,5 @@ const res = await arb.handleRequest(JSON.parse(call));
 
 Both `Context` and `Provider` implement synchronous and asynchronous disposers,
 so you can use them with JavaScript's `using` syntax and the resources will be
-freed automatically when the block exits.
+freed automatically when the block exits. They also expose a `close()` method
+for manual cleanup if preferred.

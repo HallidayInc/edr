@@ -11,7 +11,7 @@ use edr_eth::{
 use edr_evm::hardfork::{self, l1 as l1_hardfork};
 use edr_generic::GenericChainSpec;
 use edr_op::{self, OpChainSpec};
-use edr_provider::{Logger, Provider, test_utils, time::CurrentTime};
+use edr_provider::{Provider, test_utils, time::CurrentTime};
 use edr_rpc_client::jsonrpc;
 use edr_solidity::{artifacts::BuildInfoConfig, contract_decoder::ContractDecoder};
 use once_cell::sync::{Lazy, OnceCell};
@@ -90,6 +90,8 @@ struct ProviderOptions {
     #[serde(default)]
     network_id: Option<u64>,
     #[serde(default)]
+    cache_dir: Option<String>,
+    #[serde(default)]
     owned_accounts: Option<Vec<OwnedAccount>>,
     #[serde(default)]
     chain: Chain,
@@ -114,26 +116,37 @@ struct OwnedAccount {
 }
 
 type LogCallback = extern "C" fn(*const u8, usize, u8);
+type DecodeLogCallback = extern "C" fn(*const u8, usize);
 
 #[derive(Clone)]
 struct FfiLogger {
     enabled: bool,
-    callback: Option<LogCallback>,
+    print_cb: Option<LogCallback>,
+    decode_cb: Option<DecodeLogCallback>,
 }
 
 impl FfiLogger {
-    fn new(ptr: usize, enabled: bool) -> Self {
-        let callback = if ptr == 0 {
+    fn new(print_ptr: usize, decode_ptr: usize, enabled: bool) -> Self {
+        let print_cb = if print_ptr == 0 {
             None
         } else {
-            Some(unsafe { std::mem::transmute::<usize, LogCallback>(ptr) })
+            Some(unsafe { std::mem::transmute::<usize, LogCallback>(print_ptr) })
         };
-        Self { enabled, callback }
+        let decode_cb = if decode_ptr == 0 {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute::<usize, DecodeLogCallback>(decode_ptr) })
+        };
+        Self {
+            enabled,
+            print_cb,
+            decode_cb,
+        }
     }
 
     fn send(&self, message: &str, replace: bool) {
         if self.enabled {
-            if let Some(cb) = self.callback {
+            if let Some(cb) = self.print_cb {
                 let bytes = message.as_bytes();
                 cb(bytes.as_ptr(), bytes.len(), replace as u8);
             }
@@ -169,6 +182,64 @@ impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> fo
             self.send(&format!("{method}: {}", err), false);
         } else {
             self.send(method, false);
+        }
+        Ok(())
+    }
+
+    fn log_call(
+        &mut self,
+        _hardfork: ChainSpecT::Hardfork,
+        _transaction: &ChainSpecT::SignedTransaction,
+        result: &edr_provider::CallResult<ChainSpecT::HaltReason>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(cb) = self.decode_cb {
+            for input in &result.console_log_inputs {
+                cb(input.as_ptr(), input.len());
+            }
+        }
+        Ok(())
+    }
+
+    fn log_send_transaction(
+        &mut self,
+        _hardfork: ChainSpecT::Hardfork,
+        _tx: &ChainSpecT::SignedTransaction,
+        results: &[edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(cb) = self.decode_cb {
+            for r in results {
+                for input in &r.console_log_inputs {
+                    cb(input.as_ptr(), input.len());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn log_interval_mined(
+        &mut self,
+        _hardfork: ChainSpecT::Hardfork,
+        result: &edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(cb) = self.decode_cb {
+            for input in &result.console_log_inputs {
+                cb(input.as_ptr(), input.len());
+            }
+        }
+        Ok(())
+    }
+
+    fn log_mined_block(
+        &mut self,
+        _hardfork: ChainSpecT::Hardfork,
+        results: &[edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>],
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(cb) = self.decode_cb {
+            for r in results {
+                for input in &r.console_log_inputs {
+                    cb(input.as_ptr(), input.len());
+                }
+            }
         }
         Ok(())
     }
@@ -223,7 +294,13 @@ pub fn version() -> String {
 
 /// Creates a new provider within the provided context using the given JSON configuration.
 #[deno_bindgen]
-pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabled: u8) -> u32 {
+pub fn provider_new(
+    context_id: u32,
+    config_json: &str,
+    log_cb: usize,
+    decode_cb: usize,
+    log_enabled: u8,
+) -> u32 {
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
         return 0;
     }
@@ -243,6 +320,7 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             block_gas_limit: None,
             min_gas_price: None,
             network_id: None,
+            cache_dir: None,
             owned_accounts: None,
             chain: Chain::L1,
         },
@@ -307,6 +385,9 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;
             }
+            if let Some(dir) = opts.cache_dir {
+                cfg.cache_dir = dir.into();
+            }
             if let Some(ref name) = opts.hardfork {
                 if let Some(spec) = parse_l1_spec_id(name) {
                     cfg.hardfork = spec;
@@ -330,7 +411,7 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<L1ChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
+                Box::new(FfiLogger::new(log_cb, decode_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -365,10 +446,13 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;
             }
+            if let Some(dir) = opts.cache_dir {
+                cfg.cache_dir = dir.into();
+            }
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<OpChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
+                Box::new(FfiLogger::new(log_cb, decode_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,
@@ -410,6 +494,9 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;
             }
+            if let Some(dir) = opts.cache_dir {
+                cfg.cache_dir = dir.into();
+            }
             if let Some(ref name) = opts.hardfork {
                 if let Some(spec) = parse_l1_spec_id(name) {
                     cfg.hardfork = spec;
@@ -435,7 +522,7 @@ pub fn provider_new(context_id: u32, config_json: &str, log_cb: usize, log_enabl
             cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<GenericChainSpec>::new(
                 runtime.handle().clone(),
-                Box::new(FfiLogger::new(log_cb, log_enabled != 0)),
+                Box::new(FfiLogger::new(log_cb, decode_cb, log_enabled != 0)),
                 Box::new(|_event| {}),
                 cfg,
                 contract_decoder,

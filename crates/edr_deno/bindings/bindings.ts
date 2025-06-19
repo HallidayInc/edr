@@ -3,7 +3,7 @@ const dylib = Deno.dlopen(libPath, {
   context_new: { parameters: [], result: 'u32' },
   context_drop: { parameters: ['u32'], result: 'void' },
   version: { parameters: [], result: 'pointer' },
-  provider_new: { parameters: ['u32', 'pointer', 'usize', 'pointer', 'u8'], result: 'u32' },
+  provider_new: { parameters: ['u32', 'pointer', 'usize', 'pointer', 'pointer', 'u8'], result: 'u32' },
   provider_handle_request: { parameters: ['u32', 'pointer', 'usize'], result: 'pointer' },
   provider_set_verbose_tracing: { parameters: ['u32', 'u8'], result: 'void' },
   provider_drop: { parameters: ['u32'], result: 'void' },
@@ -40,12 +40,14 @@ export function provider_new(
   ctx: number,
   config: string,
   logCb: Deno.PointerValue | null,
+  decodeCb: Deno.PointerValue | null,
   enable: number,
 ): number {
   const data = encode(config);
   const ptr = Deno.UnsafePointer.of(data);
   const cb = logCb ?? null;
-  return dylib.symbols.provider_new(ctx, ptr, BigInt(data.length), cb, enable);
+  const dec = decodeCb ?? null;
+  return dylib.symbols.provider_new(ctx, ptr, BigInt(data.length), cb, dec, enable);
 }
 
 export async function provider_handle_request(id: number, req: string): Promise<string> {
@@ -79,10 +81,16 @@ export class Context {
   }
   createProvider(
     config: Record<string, unknown>,
-    logger?: { enable?: boolean; printLineCallback?: (msg: string, replace: boolean) => void },
+    logger?: {
+      enable?: boolean;
+      printLineCallback?: (msg: string, replace: boolean) => void;
+      decodeConsoleLogInputsCallback?: (data: Uint8Array) => void;
+    },
   ): Provider {
     let callbackPtr: Deno.PointerValue | null = null;
     let callback: Deno.UnsafeCallback | null = null;
+    let decodePtr: Deno.PointerValue | null = null;
+    let decodeCb: Deno.UnsafeCallback | null = null;
     const enabled = logger?.enable !== false;
     if (logger?.printLineCallback) {
       callback = new Deno.UnsafeCallback({
@@ -96,8 +104,25 @@ export class Context {
       }) as unknown as Deno.UnsafeCallback;
       callbackPtr = callback!.pointer;
     }
-    const id = provider_new(this.#id, JSON.stringify(config), callbackPtr, enabled ? 1 : 0);
-    return new Provider(id, callback);
+    if (logger?.decodeConsoleLogInputsCallback) {
+      decodeCb = new Deno.UnsafeCallback({
+        parameters: ['pointer', 'usize'] as const,
+        result: 'void' as const,
+      }, (ptr: Deno.PointerValue, len: bigint) => {
+        const view = new Deno.UnsafePointerView(ptr!);
+        const bytes = new Uint8Array(view.getArrayBuffer(Number(len)));
+        logger.decodeConsoleLogInputsCallback!(bytes);
+      }) as unknown as Deno.UnsafeCallback;
+      decodePtr = decodeCb.pointer;
+    }
+    const id = provider_new(
+      this.#id,
+      JSON.stringify(config),
+      callbackPtr,
+      decodePtr,
+      enabled ? 1 : 0,
+    );
+    return new Provider(id, callback, decodeCb);
   }
   close() {
     ctxFinalizer.unregister(this);
@@ -114,9 +139,11 @@ export class Context {
 export class Provider {
   #id: number;
   #callback: Deno.UnsafeCallback | null;
-  constructor(id: number, cb: Deno.UnsafeCallback | null) {
+  #decode: Deno.UnsafeCallback | null;
+  constructor(id: number, cb: Deno.UnsafeCallback | null, dec: Deno.UnsafeCallback | null) {
     this.#id = id;
     this.#callback = cb;
+    this.#decode = dec;
     providerFinalizer.register(this, this.#id);
   }
   async handleRequest(req: unknown): Promise<unknown> {
@@ -130,6 +157,7 @@ export class Provider {
     providerFinalizer.unregister(this);
     provider_drop(this.#id);
     if (this.#callback) this.#callback.close();
+    if (this.#decode) this.#decode.close();
   }
   [Symbol.dispose]() {
     this.close();

@@ -6,6 +6,19 @@ Deno.test("version exports a string", () => {
   assert(typeof ver === "string" && ver.length > 0);
 });
 
+Deno.test("manual cleanup works", async () => {
+  const ctx = new Context();
+  const provider = ctx.createProvider({ chain: "l1" });
+  try {
+    const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
+    const res = await provider.handleRequest(req) as any;
+    assert("result" in res);
+  } finally {
+    provider.close();
+    ctx.close();
+  }
+});
+
 Deno.test("multiple providers work", async () => {
   using ctx = new Context();
   using p1 = ctx.createProvider({ chain: "l1" });
@@ -22,7 +35,10 @@ Deno.test("multiple providers work", async () => {
 Deno.test("logging callback works", async () => {
   using ctx = new Context();
   const logs: string[] = [];
-  using p = ctx.createProvider({ chain: "l1" }, { printLineCallback: (msg) => logs.push(msg) });
+  using p = ctx.createProvider(
+    { chain: "l1" },
+    { printLineCallback: (msg) => logs.push(msg) },
+  );
   await p.handleRequest({
     id: 1,
     jsonrpc: "2.0",
@@ -31,6 +47,29 @@ Deno.test("logging callback works", async () => {
   });
   assert(logs.length > 0);
   // disposed automatically
+});
+
+Deno.test("decode logs callback", async () => {
+  using ctx = new Context();
+  const decoded: Uint8Array[] = [];
+  using p = ctx.createProvider(
+    { chain: "l1" },
+    { decodeConsoleLogInputsCallback: (d) => decoded.push(d) },
+  );
+  await p.handleRequest({
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_call",
+    params: [
+      {
+        to: "0x000000000000000000636F6e736f6c652e6c6f67",
+        data:
+          "0x41304fac0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000568656c6c6f000000000000000000000000000000000000000000000000000000",
+      },
+      "latest",
+    ],
+  });
+  assert(decoded.length > 0);
 });
 
 Deno.test("genesis account balance", async () => {
