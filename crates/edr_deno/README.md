@@ -12,6 +12,10 @@ Run `deno_bindgen` to generate the TypeScript bindings and compile the library. 
 deno_bindgen --unsafely-ignore-certificate-errors
 ```
 
+If network restrictions prevent `deno_bindgen` from downloading its formatting
+plugin, pre-generated bindings are provided in `bindings/`. They can be used
+directly for local testing without running the generator.
+
 The library exposes a simple context object and provider constructor:
 
 ```ts
