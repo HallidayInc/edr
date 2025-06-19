@@ -16,13 +16,22 @@ If network restrictions prevent `deno_bindgen` from downloading its formatting
 plugin, pre-generated bindings are provided in `bindings/`. They can be used
 directly for local testing without running the generator.
 
-The library exposes a simple context object and provider constructor:
+The library exposes a simple context object and provider constructor. The
+constructor accepts a JSON string with the following optional fields:
+
+- `chain`: either `"l1"` (default) or `"op"` for OP Stack based chains like
+  Base
+- `fork_url`: JSON-RPC endpoint to fork from
+- `fork_block_number`: block height to fork at
+
+Example:
 
 ```ts
 import { context_new, provider_new } from "./bindings/bindings.ts";
 
 const ctx = context_new();
 const provider = provider_new(ctx, JSON.stringify({
-  // provider configuration here
+  chain: "op",
+  fork_url: "https://base.llamarpc.com",
 }));
 ```

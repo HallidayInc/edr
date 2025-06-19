@@ -16,7 +16,7 @@ Deno.test("version exports a string", () => {
 
 Deno.test("create multiple providers and handle a request", async () => {
   const ctx = context_new();
-  const cfg = JSON.stringify({});
+  const cfg = JSON.stringify({ chain: "l1" });
   const id1 = provider_new(ctx, cfg);
   const id2 = provider_new(ctx, cfg);
 
@@ -40,5 +40,21 @@ Deno.test("create multiple providers and handle a request", async () => {
 
   provider_drop(id1);
   provider_drop(id2);
+  context_drop(ctx);
+});
+
+Deno.test("op provider works", async () => {
+  const ctx = context_new();
+  const cfg = JSON.stringify({ chain: "op" });
+  const id = provider_new(ctx, cfg);
+  const req = JSON.stringify({
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_blockNumber",
+    params: [],
+  });
+  const res = JSON.parse(await provider_handle_request(id, req));
+  assert("result" in res);
+  provider_drop(id);
   context_drop(ctx);
 });
