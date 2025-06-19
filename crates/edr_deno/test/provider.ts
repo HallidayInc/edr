@@ -93,6 +93,28 @@ Deno.test("genesis account balance", async () => {
   // auto dispose
 });
 
+Deno.test("chain id override", async () => {
+  using ctx = new Context();
+  using p = ctx.createProvider({ chain: "l1", chain_id: 10, network_id: 100 });
+
+  const cid = await p.handleRequest({
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_chainId",
+    params: [],
+  }) as any;
+
+  const nid = await p.handleRequest({
+    id: 2,
+    jsonrpc: "2.0",
+    method: "net_version",
+    params: [],
+  }) as any;
+
+  assertEquals(cid.result, "0xa");
+  assertEquals(nid.result, "100");
+});
+
 Deno.test("arbitrum fork eth_call", async () => {
   using ctx = new Context();
   using arb = ctx.createProvider({

@@ -63,12 +63,14 @@ impl Default for Chain {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct ProviderOptions {
     #[serde(default)]
     fork_url: Option<String>,
     #[serde(default)]
     fork_block_number: Option<u64>,
+    #[serde(default)]
+    fork_headers: Option<Vec<HttpHeader>>,
     #[serde(default)]
     chain_id: Option<u64>,
     #[serde(default)]
@@ -107,6 +109,12 @@ struct HardforkActivation {
 struct ChainConfig {
     chain_id: u64,
     hardforks: Vec<HardforkActivation>,
+}
+
+#[derive(Deserialize)]
+struct HttpHeader {
+    name: String,
+    value: String,
 }
 
 #[derive(Deserialize)]
@@ -305,25 +313,13 @@ pub fn provider_new(
         return 0;
     }
 
-    let opts: ProviderOptions = match serde_json::from_str(config_json) {
-        Ok(c) => c,
-        Err(_) => ProviderOptions {
-            fork_url: None,
-            fork_block_number: None,
-            chain_id: None,
-            hardfork: None,
-            chains: None,
-            allow_unlimited_contract_size: None,
-            allow_blocks_with_same_timestamp: None,
-            bail_on_call_failure: None,
-            bail_on_transaction_failure: None,
-            block_gas_limit: None,
-            min_gas_price: None,
-            network_id: None,
-            cache_dir: None,
-            owned_accounts: None,
-            chain: Chain::L1,
-        },
+    let opts: ProviderOptions = if config_json.trim().is_empty() {
+        ProviderOptions::default()
+    } else {
+        match serde_json::from_str(config_json) {
+            Ok(c) => c,
+            Err(_) => return 0,
+        }
     };
 
     let owned_accounts = if let Some(list) = opts.owned_accounts {
@@ -347,13 +343,13 @@ pub fn provider_new(
         Vec::new()
     };
 
-    let fork = opts
-        .fork_url
-        .map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
-            json_rpc_url: url,
-            block_number: opts.fork_block_number,
-            http_headers: None,
-        });
+    let fork = opts.fork_url.as_ref().map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
+        json_rpc_url: url.clone(),
+        block_number: opts.fork_block_number,
+        http_headers: opts.fork_headers.as_ref().map(|h| {
+            h.iter().map(|h| (h.name.clone(), h.value.clone())).collect()
+        }),
+    });
     let runtime = runtime();
     let contract_decoder = match ContractDecoder::new(&BuildInfoConfig::default()) {
         Ok(d) => Arc::new(d),
@@ -381,6 +377,12 @@ pub fn provider_new(
             }
             if let Some(v) = opts.min_gas_price {
                 cfg.min_gas_price = v;
+            }
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
             }
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;
@@ -442,6 +444,12 @@ pub fn provider_new(
             }
             if let Some(v) = opts.min_gas_price {
                 cfg.min_gas_price = v;
+            }
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
             }
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;

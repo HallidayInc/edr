@@ -23,6 +23,7 @@ constructor accepts a JSON string with the following optional fields:
   `"generic"` for custom L1 forks such as Arbitrum
 - `fork_url`: JSON-RPC endpoint to fork from
 - `fork_block_number`: block height to fork at
+- `fork_headers`: array of `{ name, value }` pairs sent as HTTP headers when forking
 - `chain_id`: override the provider's chain ID
 - `hardfork`: starting hardfork for the chain
 - `chains`: array of chain configurations with custom hardfork activations
