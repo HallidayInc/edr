@@ -16,8 +16,9 @@ Deno.test("version exports a string", () => {
 
 Deno.test("create multiple providers and handle a request", async () => {
   const ctx = context_new();
-  const id1 = provider_new(ctx);
-  const id2 = provider_new(ctx);
+  const cfg = JSON.stringify({});
+  const id1 = provider_new(ctx, cfg);
+  const id2 = provider_new(ctx, cfg);
 
   const req = JSON.stringify({
     id: 1,

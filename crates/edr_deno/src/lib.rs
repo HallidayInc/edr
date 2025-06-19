@@ -9,6 +9,15 @@ use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
 use edr_eth::l1::{self, L1ChainSpec};
 use edr_solidity::{contract_decoder::ContractDecoder, artifacts::BuildInfoConfig};
 use edr_rpc_client::jsonrpc;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct ProviderOptions {
+    #[serde(default)]
+    fork_url: Option<String>,
+    #[serde(default)]
+    fork_block_number: Option<u64>,
+}
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static PROVIDERS: Lazy<Mutex<HashMap<u32, Arc<Provider<L1ChainSpec>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -40,23 +49,42 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Creates a new provider within the provided context using a default configuration.
+/// Creates a new provider within the provided context using the given JSON configuration.
 #[deno_bindgen]
-pub fn provider_new(context_id: u32) -> u32 {
+pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
         return 0;
     }
 
+    let opts: ProviderOptions = match serde_json::from_str(config_json) {
+        Ok(c) => c,
+        Err(_) => ProviderOptions { fork_url: None, fork_block_number: None },
+    };
+
+    let fork = opts.fork_url.map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
+        json_rpc_url: url,
+        block_number: opts.fork_block_number,
+        http_headers: None,
+    });
+    let provider_config = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+
     let runtime = runtime();
-    let contract_decoder = ContractDecoder::new(&BuildInfoConfig::default()).expect("decoder");
+    let contract_decoder = match ContractDecoder::new(&BuildInfoConfig::default()) {
+        Ok(d) => Arc::new(d),
+        Err(_) => return 0,
+    };
     let provider = Provider::<L1ChainSpec>::new(
         runtime.handle().clone(),
         Box::new(NoopLogger::<L1ChainSpec>::default()),
         Box::new(|_event| {}),
-        test_utils::create_test_config::<l1::SpecId>(),
-        Arc::new(contract_decoder),
+        provider_config,
+        contract_decoder,
         CurrentTime,
-    ).expect("provider");
+    );
+    let provider = match provider {
+        Ok(p) => p,
+        Err(_) => return 0,
+    };
 
     let provider = Arc::new(provider);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);

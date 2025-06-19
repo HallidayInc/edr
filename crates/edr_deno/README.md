@@ -18,5 +18,7 @@ The library exposes a simple context object and provider constructor:
 import { context_new, provider_new } from "./bindings/bindings.ts";
 
 const ctx = context_new();
-const provider = provider_new(ctx);
+const provider = provider_new(ctx, JSON.stringify({
+  // provider configuration here
+}));
 ```
