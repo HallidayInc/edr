@@ -117,4 +117,4 @@ Brewfile.lock.json
 
 # Benchmark
 benchmark-output.json
-\nbindings.json
+bindings.json
