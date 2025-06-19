@@ -7,6 +7,8 @@ use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{At
 use tokio::runtime::Runtime;
 use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
 use edr_eth::l1::{self, L1ChainSpec};
+use edr_evm::hardfork::l1 as l1_hardfork;
+use edr_generic::GenericChainSpec;
 use edr_op::{self, OpChainSpec};
 use edr_solidity::{contract_decoder::ContractDecoder, artifacts::BuildInfoConfig};
 use edr_rpc_client::jsonrpc;
@@ -17,6 +19,7 @@ use serde::Deserialize;
 enum Chain {
     L1,
     Op,
+    Generic,
 }
 
 impl Default for Chain {
@@ -38,6 +41,7 @@ struct ProviderOptions {
 enum ProviderEntry {
     L1(Arc<Provider<L1ChainSpec>>),
     Op(Arc<Provider<OpChainSpec>>),
+    Generic(Arc<Provider<GenericChainSpec>>),
 }
 
 impl Clone for ProviderEntry {
@@ -45,6 +49,7 @@ impl Clone for ProviderEntry {
         match self {
             Self::L1(p) => Self::L1(Arc::clone(p)),
             Self::Op(p) => Self::Op(Arc::clone(p)),
+            Self::Generic(p) => Self::Generic(Arc::clone(p)),
         }
     }
 }
@@ -134,6 +139,25 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
                 Err(_) => return 0,
             }
         }
+        Chain::Generic => {
+            let mut cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+            cfg.chain_id = 42161;
+            cfg.network_id = 42161;
+            if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
+                cfg.chains.insert(42161, acts.clone());
+            }
+            match Provider::<GenericChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(NoopLogger::<GenericChainSpec>::default()),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(p) => ProviderEntry::Generic(Arc::new(p)),
+                Err(_) => return 0,
+            }
+        }
     };
 
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -177,6 +201,18 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
+        ProviderEntry::Generic(provider) => {
+            let req: edr_provider::requests::ProviderRequest<GenericChainSpec> = match serde_json::from_str(request) {
+                Ok(r) => r,
+                Err(e) => {
+                    let err = jsonrpc::ResponseData::<()>::new_error(-32600, &e.to_string(), None);
+                    return serde_json::to_string(&err).unwrap();
+                }
+            };
+            let result = provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
+            serde_json::to_string(&response).unwrap()
+        }
     }
 }
 
@@ -187,6 +223,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
         match entry {
             ProviderEntry::L1(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Op(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
         }
     }
 }

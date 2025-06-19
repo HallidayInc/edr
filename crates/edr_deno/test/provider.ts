@@ -58,3 +58,30 @@ Deno.test("op provider works", async () => {
   provider_drop(id);
   context_drop(ctx);
 });
+
+Deno.test("arbitrum fork eth_call works", async () => {
+  const ctx = context_new();
+  const cfg = JSON.stringify({
+    chain: "generic",
+    fork_url: "https://arb1.arbitrum.io/rpc",
+  });
+  const id = provider_new(ctx, cfg);
+  const callReq = JSON.stringify({
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_call",
+    params: [
+      {
+        to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
+        data:
+          "0x70a08231000000000000000000000000000000000000000000000000000000000000dead",
+      },
+      "latest",
+    ],
+  });
+  const res = JSON.parse(await provider_handle_request(id, callReq));
+  assert("result" in res);
+  assert(typeof res.result === "string");
+  provider_drop(id);
+  context_drop(ctx);
+});
