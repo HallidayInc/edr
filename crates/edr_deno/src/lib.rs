@@ -3,7 +3,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use deno_bindgen::deno_bindgen;
 use once_cell::sync::{Lazy, OnceCell};
-use std::{collections::HashMap, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}};
+use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}};
 use tokio::runtime::Runtime;
 use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
 use edr_eth::l1::{self, L1ChainSpec};
@@ -12,10 +12,26 @@ use edr_rpc_client::jsonrpc;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static PROVIDERS: Lazy<Mutex<HashMap<u32, Arc<Provider<L1ChainSpec>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
+static CONTEXTS: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
 
 fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| Runtime::new().expect("create runtime"))
+}
+
+/// Creates a new context instance. A context is required to create providers.
+#[deno_bindgen]
+pub fn context_new() -> u32 {
+    let id = NEXT_CTX_ID.fetch_add(1, Ordering::Relaxed);
+    CONTEXTS.lock().unwrap().insert(id);
+    id
+}
+
+/// Drops a previously created context.
+#[deno_bindgen]
+pub fn context_drop(id: u32) {
+    CONTEXTS.lock().unwrap().remove(&id);
 }
 
 /// Returns the current version of the crate.
@@ -24,9 +40,13 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Creates a new provider using a default configuration.
+/// Creates a new provider within the provided context using a default configuration.
 #[deno_bindgen]
-pub fn provider_new() -> u32 {
+pub fn provider_new(context_id: u32) -> u32 {
+    if !CONTEXTS.lock().unwrap().contains(&context_id) {
+        return 0;
+    }
+
     let runtime = runtime();
     let contract_decoder = ContractDecoder::new(&BuildInfoConfig::default()).expect("decoder");
     let provider = Provider::<L1ChainSpec>::new(
@@ -78,4 +98,10 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
         }
     };
     provider.set_verbose_tracing(enabled != 0);
+}
+
+/// Drops a provider created with [`provider_new`].
+#[deno_bindgen]
+pub fn provider_drop(id: u32) {
+    PROVIDERS.lock().unwrap().remove(&id);
 }
