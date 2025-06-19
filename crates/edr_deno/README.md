@@ -23,6 +23,9 @@ constructor accepts a JSON string with the following optional fields:
   `"generic"` for custom L1 forks such as Arbitrum
 - `fork_url`: JSON-RPC endpoint to fork from
 - `fork_block_number`: block height to fork at
+- `chain_id`: override the provider's chain ID
+- `hardfork`: starting hardfork for the chain
+- `chains`: array of chain configurations with custom hardfork activations
 
 Example:
 
@@ -39,6 +42,14 @@ const provider = provider_new(ctx, JSON.stringify({
 const arb = provider_new(ctx, JSON.stringify({
   chain: "generic",
   fork_url: "https://arb1.arbitrum.io/rpc",
+  chain_id: 42161,
+  hardfork: "cancun",
+  chains: [
+    {
+      chain_id: 42161,
+      hardforks: [{ block_number: 0, spec_id: "cancun" }],
+    },
+  ],
 }));
 
 const call = JSON.stringify({
@@ -49,7 +60,7 @@ const call = JSON.stringify({
     {
       to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
       data:
-        "0x70a08231000000000000000000000000000000000000000000000000000000000000dead",
+        "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
     },
     "latest",
   ],

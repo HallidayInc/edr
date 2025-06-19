@@ -64,6 +64,14 @@ Deno.test("arbitrum fork eth_call works", async () => {
   const cfg = JSON.stringify({
     chain: "generic",
     fork_url: "https://arb1.arbitrum.io/rpc",
+    chain_id: 42161,
+    hardfork: "cancun",
+    chains: [
+      {
+        chain_id: 42161,
+        hardforks: [{ block_number: 0, spec_id: "cancun" }],
+      },
+    ],
   });
   const id = provider_new(ctx, cfg);
   const callReq = JSON.stringify({
@@ -74,14 +82,15 @@ Deno.test("arbitrum fork eth_call works", async () => {
       {
         to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
         data:
-          "0x70a08231000000000000000000000000000000000000000000000000000000000000dead",
+          "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
       },
       "latest",
     ],
   });
   const res = JSON.parse(await provider_handle_request(id, callReq));
   assert("result" in res);
-  assert(typeof res.result === "string");
+  const balance = BigInt(res.result);
+  assert(balance > 0n);
   provider_drop(id);
   context_drop(ctx);
 });

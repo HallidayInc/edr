@@ -7,12 +7,37 @@ use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{At
 use tokio::runtime::Runtime;
 use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
 use edr_eth::l1::{self, L1ChainSpec};
-use edr_evm::hardfork::l1 as l1_hardfork;
+use edr_evm::hardfork::{self, l1 as l1_hardfork};
 use edr_generic::GenericChainSpec;
 use edr_op::{self, OpChainSpec};
 use edr_solidity::{contract_decoder::ContractDecoder, artifacts::BuildInfoConfig};
 use edr_rpc_client::jsonrpc;
 use serde::Deserialize;
+
+fn parse_l1_spec_id(name: &str) -> Option<l1::SpecId> {
+    match name.to_ascii_lowercase().as_str() {
+        "frontier" => Some(l1::SpecId::FRONTIER),
+        "frontierthawing" | "frontier_thawing" => Some(l1::SpecId::FRONTIER_THAWING),
+        "homestead" => Some(l1::SpecId::HOMESTEAD),
+        "daofork" | "dao_fork" => Some(l1::SpecId::DAO_FORK),
+        "tangerine" => Some(l1::SpecId::TANGERINE),
+        "spuriousdragon" | "spurious_dragon" => Some(l1::SpecId::SPURIOUS_DRAGON),
+        "byzantium" => Some(l1::SpecId::BYZANTIUM),
+        "constantinople" => Some(l1::SpecId::CONSTANTINOPLE),
+        "petersburg" => Some(l1::SpecId::PETERSBURG),
+        "istanbul" => Some(l1::SpecId::ISTANBUL),
+        "muirglacier" | "muir_glacier" => Some(l1::SpecId::MUIR_GLACIER),
+        "berlin" => Some(l1::SpecId::BERLIN),
+        "london" => Some(l1::SpecId::LONDON),
+        "arrowglacier" | "arrow_glacier" => Some(l1::SpecId::ARROW_GLACIER),
+        "grayglacier" | "gray_glacier" => Some(l1::SpecId::GRAY_GLACIER),
+        "merge" => Some(l1::SpecId::MERGE),
+        "shanghai" => Some(l1::SpecId::SHANGHAI),
+        "cancun" => Some(l1::SpecId::CANCUN),
+        "prague" => Some(l1::SpecId::PRAGUE),
+        _ => None,
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -35,7 +60,25 @@ struct ProviderOptions {
     #[serde(default)]
     fork_block_number: Option<u64>,
     #[serde(default)]
+    chain_id: Option<u64>,
+    #[serde(default)]
+    hardfork: Option<String>,
+    #[serde(default)]
+    chains: Option<Vec<ChainConfig>>,    
+    #[serde(default)]
     chain: Chain,
+}
+
+#[derive(Deserialize)]
+struct HardforkActivation {
+    block_number: u64,
+    spec_id: String,
+}
+
+#[derive(Deserialize)]
+struct ChainConfig {
+    chain_id: u64,
+    hardforks: Vec<HardforkActivation>,
 }
 
 enum ProviderEntry {
@@ -96,6 +139,9 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
         Err(_) => ProviderOptions {
             fork_url: None,
             fork_block_number: None,
+            chain_id: None,
+            hardfork: None,
+            chains: None,
             chain: Chain::L1,
         },
     };
@@ -112,7 +158,25 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
     };
     let entry = match opts.chain {
         Chain::L1 => {
-            let cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+            let mut cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
+            if let Some(ref name) = opts.hardfork {
+                if let Some(spec) = parse_l1_spec_id(name) {
+                    cfg.hardfork = spec;
+                }
+            }
+            if let Some(chains) = &opts.chains {
+                for c in chains {
+                    let mut activations = Vec::new();
+                    for hf in &c.hardforks {
+                        if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
+                        activations.push((hardfork::ForkCondition::Block(hf.block_number), spec));
+                        }
+                    }
+                    if !activations.is_empty() {
+                        cfg.chains.insert(c.chain_id, hardfork::Activations::new(activations));
+                    }
+                }
+            }
             match Provider::<L1ChainSpec>::new(
                 runtime.handle().clone(),
                 Box::new(NoopLogger::<L1ChainSpec>::default()),
@@ -141,10 +205,32 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
         }
         Chain::Generic => {
             let mut cfg = test_utils::create_test_config_with_fork::<l1::SpecId>(fork);
-            cfg.chain_id = 42161;
-            cfg.network_id = 42161;
-            if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
-                cfg.chains.insert(42161, acts.clone());
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                cfg.network_id = id;
+            } else {
+                cfg.chain_id = 42161;
+                cfg.network_id = 42161;
+            }
+            if let Some(ref name) = opts.hardfork {
+                if let Some(spec) = parse_l1_spec_id(name) {
+                    cfg.hardfork = spec;
+                }
+            }
+            if let Some(chains) = opts.chains {
+                for c in chains {
+                    let mut activations = Vec::new();
+                    for hf in c.hardforks {
+                        if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
+                        activations.push((hardfork::ForkCondition::Block(hf.block_number), spec));
+                        }
+                    }
+                    if !activations.is_empty() {
+                        cfg.chains.insert(c.chain_id, hardfork::Activations::new(activations));
+                    }
+                }
+            } else if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
+                cfg.chains.insert(cfg.chain_id, acts.clone());
             }
             match Provider::<GenericChainSpec>::new(
                 runtime.handle().clone(),
