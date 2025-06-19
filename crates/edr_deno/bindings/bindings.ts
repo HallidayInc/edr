@@ -56,3 +56,46 @@ export function provider_set_verbose_tracing(id: number, enabled: number): void 
 export function provider_drop(id: number): void {
   dylib.symbols.provider_drop(id);
 }
+
+const ctxFinalizer = new FinalizationRegistry<number>((id) => {
+  dylib.symbols.context_drop(id);
+});
+
+const providerFinalizer = new FinalizationRegistry<number>((id) => {
+  dylib.symbols.provider_drop(id);
+});
+
+export class Context {
+  #id: number;
+  constructor() {
+    this.#id = context_new();
+    ctxFinalizer.register(this, this.#id);
+  }
+  createProvider(config: Record<string, unknown>): Provider {
+    const id = provider_new(this.#id, JSON.stringify(config));
+    return new Provider(id);
+  }
+  close() {
+    ctxFinalizer.unregister(this);
+    context_drop(this.#id);
+  }
+}
+
+export class Provider {
+  #id: number;
+  constructor(id: number) {
+    this.#id = id;
+    providerFinalizer.register(this, this.#id);
+  }
+  async handleRequest(req: unknown): Promise<unknown> {
+    const res = await provider_handle_request(this.#id, JSON.stringify(req));
+    return JSON.parse(res);
+  }
+  setVerboseTracing(enabled: boolean) {
+    provider_set_verbose_tracing(this.#id, enabled ? 1 : 0);
+  }
+  close() {
+    providerFinalizer.unregister(this);
+    provider_drop(this.#id);
+  }
+}

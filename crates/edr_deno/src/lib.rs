@@ -6,7 +6,8 @@ use once_cell::sync::{Lazy, OnceCell};
 use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, sync::atomic::{AtomicU32, Ordering}, num::NonZeroU64};
 use tokio::runtime::Runtime;
 use edr_provider::{Provider, test_utils, NoopLogger, time::CurrentTime};
-use edr_eth::l1::{self, L1ChainSpec};
+use edr_eth::{l1::{self, L1ChainSpec}, U256, signature::{secret_key_from_str, DangerousSecretKeyStr}};
+use core::str::FromStr;
 use edr_evm::hardfork::{self, l1 as l1_hardfork};
 use edr_generic::GenericChainSpec;
 use edr_op::{self, OpChainSpec};
@@ -80,6 +81,8 @@ struct ProviderOptions {
     #[serde(default)]
     network_id: Option<u64>,
     #[serde(default)]
+    owned_accounts: Option<Vec<OwnedAccount>>,
+    #[serde(default)]
     chain: Chain,
 }
 
@@ -93,6 +96,12 @@ struct HardforkActivation {
 struct ChainConfig {
     chain_id: u64,
     hardforks: Vec<HardforkActivation>,
+}
+
+#[derive(Deserialize)]
+struct OwnedAccount {
+    secret_key: String,
+    balance: String,
 }
 
 enum ProviderEntry {
@@ -163,8 +172,27 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             block_gas_limit: None,
             min_gas_price: None,
             network_id: None,
+            owned_accounts: None,
             chain: Chain::L1,
         },
+    };
+
+    let owned_accounts = if let Some(list) = opts.owned_accounts {
+        let mut out = Vec::new();
+        for acc in list {
+            let key = match secret_key_from_str(DangerousSecretKeyStr(&acc.secret_key)) {
+                Ok(k) => k,
+                Err(_) => return 0,
+            };
+            let balance = match U256::from_str(&acc.balance) {
+                Ok(b) => b,
+                Err(_) => return 0,
+            };
+            out.push(edr_provider::config::OwnedAccount { secret_key: key, balance });
+        }
+        out
+    } else {
+        Vec::new()
     };
 
     let fork = opts.fork_url.map(|url| edr_provider::hardhat_rpc_types::ForkConfig {
@@ -221,6 +249,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
                     }
                 }
             }
+            cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<L1ChainSpec>::new(
                 runtime.handle().clone(),
                 Box::new(NoopLogger::<L1ChainSpec>::default()),
@@ -258,6 +287,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             if let Some(v) = opts.network_id {
                 cfg.network_id = v;
             }
+            cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<OpChainSpec>::new(
                 runtime.handle().clone(),
                 Box::new(NoopLogger::<OpChainSpec>::default()),
@@ -322,6 +352,7 @@ pub fn provider_new(context_id: u32, config_json: &str) -> u32 {
             } else if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
                 cfg.chains.insert(cfg.chain_id, acts.clone());
             }
+            cfg.accounts.extend_from_slice(&owned_accounts);
             match Provider::<GenericChainSpec>::new(
                 runtime.handle().clone(),
                 Box::new(NoopLogger::<GenericChainSpec>::default()),

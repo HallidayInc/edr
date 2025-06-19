@@ -35,21 +35,33 @@ constructor accepts a JSON string with the following optional fields:
 - `block_gas_limit`: override the block gas limit
 - `min_gas_price`: minimum gas price for the next block
 - `network_id`: set the network ID separately from `chain_id`
+- `owned_accounts`: array of accounts to pre-fund in the genesis block with the
+  fields `secret_key` and `balance`
 
 Example:
 
 ```ts
-import { context_new, provider_new, provider_handle_request } from "./bindings/bindings.ts";
+import { Context } from "./bindings/bindings.ts";
 
-const ctx = context_new();
-const provider = provider_new(ctx, JSON.stringify({
+const ctx = new Context();
+const provider = ctx.createProvider({
   chain: "op",
   fork_url: "https://base.llamarpc.com",
   block_gas_limit: 30_000_000,
-}));
+});
+
+// create a local chain with one funded account
+const local = ctx.createProvider({
+  owned_accounts: [
+    {
+      secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      balance: "0xde0b6b3a7640000",
+    },
+  ],
+});
 
 // fork Arbitrum and query a contract
-const arb = provider_new(ctx, JSON.stringify({
+const arb = ctx.createProvider({
   chain: "generic",
   fork_url: "https://arb1.arbitrum.io/rpc",
   chain_id: 42161,
@@ -61,7 +73,7 @@ const arb = provider_new(ctx, JSON.stringify({
       hardforks: [{ block_number: 0, spec_id: "cancun" }],
     },
   ],
-}));
+});
 
 const call = JSON.stringify({
   id: 1,
@@ -76,5 +88,5 @@ const call = JSON.stringify({
     "latest",
   ],
 });
-const res = await provider_handle_request(arb, call);
+const res = await arb.handleRequest(JSON.parse(call));
 ```

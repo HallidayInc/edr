@@ -1,96 +1,72 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import {
-  context_new,
-  context_drop,
-  provider_new,
-  provider_handle_request,
-  provider_set_verbose_tracing,
-  provider_drop,
-  version,
-} from "../bindings/bindings.ts";
+import { Context, version } from "../bindings/bindings.ts";
 
 Deno.test("version exports a string", () => {
   const ver = version();
   assert(typeof ver === "string" && ver.length > 0);
 });
 
-Deno.test("create multiple providers and handle a request", async () => {
-  const ctx = context_new();
-  const cfg = JSON.stringify({ chain: "l1" });
-  const id1 = provider_new(ctx, cfg);
-  const id2 = provider_new(ctx, cfg);
+Deno.test("multiple providers work", async () => {
+  const ctx = new Context();
+  const p1 = ctx.createProvider({ chain: "l1" });
+  const p2 = ctx.createProvider({ chain: "l1" });
 
-  const req = JSON.stringify({
-    id: 1,
-    jsonrpc: "2.0",
-    method: "eth_blockNumber",
-    params: [],
-  });
-
-  const res1 = JSON.parse(await provider_handle_request(id1, req));
-  const res2 = JSON.parse(await provider_handle_request(id2, req));
-
-  assert("result" in res1);
-  assert("result" in res2);
-  assertEquals(res1.result, res2.result);
-
-  // ensure verbose tracing setter doesn't throw
-  provider_set_verbose_tracing(id1, 1);
-  provider_set_verbose_tracing(id2, 0);
-
-  provider_drop(id1);
-  provider_drop(id2);
-  context_drop(ctx);
+  const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
+  const r1 = await p1.handleRequest(req);
+  const r2 = await p2.handleRequest(req);
+  assert("result" in r1);
+  assertEquals(r1.result, r2.result);
+  p1.close();
+  p2.close();
+  ctx.close();
 });
 
-Deno.test("op provider works", async () => {
-  const ctx = context_new();
-  const cfg = JSON.stringify({ chain: "op" });
-  const id = provider_new(ctx, cfg);
-  const req = JSON.stringify({
+Deno.test("genesis account balance", async () => {
+  const ctx = new Context();
+  const p = ctx.createProvider({
+    owned_accounts: [
+      {
+        secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        balance: "0xde0b6b3a7640000",
+      },
+    ],
+  });
+  const req = {
     id: 1,
     jsonrpc: "2.0",
-    method: "eth_blockNumber",
-    params: [],
-  });
-  const res = JSON.parse(await provider_handle_request(id, req));
-  assert("result" in res);
-  provider_drop(id);
-  context_drop(ctx);
+    method: "eth_getBalance",
+    params: ["0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "latest"],
+  };
+  const res = await p.handleRequest(req);
+  assertEquals(res.result.toLowerCase(), "0xde0b6b3a7640000");
+  p.close();
+  ctx.close();
 });
 
-Deno.test("arbitrum fork eth_call works", async () => {
-  const ctx = context_new();
-  const cfg = JSON.stringify({
+Deno.test("arbitrum fork eth_call", async () => {
+  const ctx = new Context();
+  const arb = ctx.createProvider({
     chain: "generic",
     fork_url: "https://arb1.arbitrum.io/rpc",
     chain_id: 42161,
     hardfork: "cancun",
-    chains: [
-      {
-        chain_id: 42161,
-        hardforks: [{ block_number: 0, spec_id: "cancun" }],
-      },
-    ],
+    chains: [{ chain_id: 42161, hardforks: [{ block_number: 0, spec_id: "cancun" }] }],
   });
-  const id = provider_new(ctx, cfg);
-  const callReq = JSON.stringify({
+  const call = {
     id: 1,
     jsonrpc: "2.0",
     method: "eth_call",
     params: [
       {
         to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
-        data:
-          "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+        data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
       },
       "latest",
     ],
-  });
-  const res = JSON.parse(await provider_handle_request(id, callReq));
-  assert("result" in res);
-  const balance = BigInt(res.result);
-  assert(balance > 0n);
-  provider_drop(id);
-  context_drop(ctx);
+  };
+  const res = await arb.handleRequest(call);
+  const bal = BigInt(res.result);
+  assert(bal > 0n);
+  arb.close();
+  ctx.close();
 });
