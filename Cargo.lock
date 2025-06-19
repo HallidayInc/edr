@@ -1636,7 +1636,6 @@ name = "edr_deno"
 version = "0.1.0"
 dependencies = [
  "deno_bindgen",
- "edr_defaults",
  "edr_eth",
  "edr_evm",
  "edr_generic",
