@@ -20,17 +20,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
 
-      - uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --target ${{ matrix.target }} --release -p edr_deno
+      - name: Build library
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cargo install cross --version 0.2.5
+            cross build --target ${{ matrix.target }} --release -p edr_deno
+          else
+            cargo build --target ${{ matrix.target }} --release -p edr_deno
+          fi
 
       - name: Place artifact
         run: |

@@ -122,3 +122,5 @@ for manual cleanup if preferred.
 ### Local build
 
 Run `make deno-package` from the repository root to compile `edr_deno` for your platform and create a release archive.
+
+Compilation uses the `deno_bindgen` procedural macros which invoke the `deno` binary. Ensure Deno is installed and available in `PATH` when building. The GitHub workflow installs it via `denoland/setup-deno@v1`.
