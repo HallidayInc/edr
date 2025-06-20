@@ -6,15 +6,22 @@ These bindings are still under development and only expose a minimal API. The go
 
 ## Usage
 
-Run `deno_bindgen` to generate the TypeScript bindings and compile the library. When running tests or the CLI inside restricted environments, you may need to add `--unsafely-ignore-certificate-errors` to the command line so remote dependencies can be fetched.
+Download `nomicfoundation-edr-deno-<version>.tgz` from the project releases and
+extract it next to your source files:
 
 ```bash
-deno_bindgen --unsafely-ignore-certificate-errors
+tar xf nomicfoundation-edr-deno-<version>.tgz
 ```
 
-If network restrictions prevent `deno_bindgen` from downloading its formatting
-plugin, pre-generated bindings are provided in `bindings/`. They can be used
-directly for local testing without running the generator.
+The archive contains the precompiled libraries for supported targets and a
+`bindings.ts` file that automatically loads the correct one based on your
+platform. Import the bindings from `crates/edr_deno` and create a context:
+
+```ts
+import { Context } from "./crates/edr_deno/bindings/bindings.ts";
+
+using ctx = new Context();
+```
 
 The library exposes a simple context object and provider constructor. The
 constructor accepts a JSON string with the following optional fields:

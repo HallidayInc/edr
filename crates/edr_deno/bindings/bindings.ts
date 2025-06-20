@@ -1,5 +1,21 @@
-const libPath = new URL('../../../target/debug/libedr_deno.so', import.meta.url);
-const dylib = Deno.dlopen(libPath, {
+function resolveLib(): URL {
+  const arch = Deno.build.arch;
+  const os = Deno.build.os;
+  let target = `${arch}-unknown-${os}`;
+  if (os === "darwin") {
+    target = `${arch}-apple-darwin`;
+  }
+  const ext = os === "windows" ? "dll" : os === "darwin" ? "dylib" : "so";
+  const bundled = new URL(`../edr_deno.${target}.${ext}`, import.meta.url);
+  try {
+    Deno.statSync(bundled);
+    return bundled;
+  } catch {
+    return new URL(`../../../target/debug/libedr_deno.${ext}`, import.meta.url);
+  }
+}
+
+const dylib = Deno.dlopen(resolveLib(), {
   context_new: { parameters: [], result: 'u32' },
   context_drop: { parameters: ['u32'], result: 'void' },
   version: { parameters: [], result: 'pointer' },
