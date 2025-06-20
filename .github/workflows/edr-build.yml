@@ -30,14 +30,11 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
-      - name: Build library
-        run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cargo install cross --version 0.2.5
-            cross build --target ${{ matrix.target }} --release -p edr_deno
-          else
-            cargo build --target ${{ matrix.target }} --release -p edr_deno
-          fi
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: build
+          args: --target ${{ matrix.target }} --release -p edr_deno
 
       - name: Place artifact
         run: |
