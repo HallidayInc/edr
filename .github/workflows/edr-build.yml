@@ -20,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: denoland/setup-deno@v1
+      - uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          deno-version: v2.x
 
       - uses: actions-rs/toolchain@v1
         with:
@@ -63,8 +63,8 @@ jobs:
 
       - name: Package artifacts
         run: |
-          version=$(grep '^version' crates/edr_deno/Cargo.toml | head -n1 | cut -d '"' -f2)
-          tar czf nomicfoundation-edr-deno-$version.tgz crates/edr_deno/README.md crates/edr_deno/bindings/bindings.ts crates/edr_deno/edr_deno.*
+          crate_version=$(grep '^version' crates/edr_deno/Cargo.toml | head -n1 | cut -d '"' -f2)
+          tar czf nomicfoundation-edr-deno-$crate_version.tgz crates/edr_deno/README.md crates/edr_deno/bindings/bindings.ts crates/edr_deno/edr_deno.*
 
       - uses: actions/upload-artifact@v4
         with:
