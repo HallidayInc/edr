@@ -118,3 +118,7 @@ Both `Context` and `Provider` implement synchronous and asynchronous disposers,
 so you can use them with JavaScript's `using` syntax and the resources will be
 freed automatically when the block exits. They also expose a `close()` method
 for manual cleanup if preferred.
+
+### Local build
+
+Run `make deno-package` from the repository root to compile `edr_deno` for your platform and create a release archive.
