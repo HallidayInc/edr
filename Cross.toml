@@ -1,8 +1,0 @@
-[target.x86_64-unknown-linux-gnu]
-pre-build = ["curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- v2.0.0"]
-
-[target.aarch64-unknown-linux-gnu]
-pre-build = ["curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- v2.0.0"]
-
-[target.aarch64-apple-darwin]
-pre-build = ["curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- v2.0.0"]

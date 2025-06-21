@@ -14,7 +14,7 @@ edr_provider = { path = "../edr_provider", features = ["test-utils"] }
 edr_eth = { path = "../edr_eth" }
 edr_solidity = { path = "../edr_solidity" }
 edr_rpc_client = { path = "../edr_rpc_client" }
-edr_op = { path = "../edr_op" }
+edr_op = { path = "../edr_op", default-features = false }
 edr_generic = { path = "../edr_generic" }
 edr_evm = { path = "../edr_evm" }
 tokio = { version = "1.21.2", features = ["rt-multi-thread"] }
