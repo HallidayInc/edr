@@ -30,7 +30,12 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
+      - name: Build
+        if: matrix.os == 'macos-14'
+        run: cargo build --target ${{ matrix.target }} --release -p edr_deno
+
       - uses: actions-rs/cargo@v1
+        if: matrix.os != 'macos-14'
         with:
           use-cross: true
           command: build
