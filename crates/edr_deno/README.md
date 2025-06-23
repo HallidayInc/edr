@@ -27,25 +27,23 @@ The library exposes a simple context object and provider constructor. The
 constructor accepts a JSON string with the following optional fields:
 
 - `chain`: `"l1"` (default), `"op"` for OP Stack chains like Base, or
-  `"generic"` for custom L1 forks such as Arbitrum
-- `fork_url`: JSON-RPC endpoint to fork from
-- `fork_block_number`: block height to fork at
-- `fork_headers`: array of `{ name, value }` pairs sent as HTTP headers when forking
-- `chain_id`: override the provider's chain ID
+- `"generic"` for custom L1 forks such as Arbitrum
+- `forkUrl`: JSON-RPC endpoint to fork from
+- `forkBlockNumber`: block height to fork at
+- `forkHeaders`: array of `{ name, value }` pairs sent as HTTP headers when forking
+- `chainId`: override the provider's chain ID
 - `hardfork`: starting hardfork for the chain
 - `chains`: array of chain configurations with custom hardfork activations
-- `allow_unlimited_contract_size`: allow deploying contracts larger than the
-  usual limit
-- `allow_blocks_with_same_timestamp`: permit mining blocks with duplicate
-  timestamps
-- `bail_on_call_failure`: return an error when `eth_call` fails
-- `bail_on_transaction_failure`: return an error when a transaction fails
-- `block_gas_limit`: override the block gas limit
-- `min_gas_price`: minimum gas price for the next block
-- `network_id`: set the network ID separately from `chain_id`
-- `cache_dir`: directory used to cache RPC responses
-- `owned_accounts`: array of accounts to pre-fund in the genesis block with the
-  fields `secret_key` and `balance`
+- `allowUnlimitedContractSize`: allow deploying contracts larger than the usual limit
+- `allowBlocksWithSameTimestamp`: permit mining blocks with duplicate timestamps
+- `bailOnCallFailure`: return an error when `eth_call` fails
+- `bailOnTransactionFailure`: return an error when a transaction fails
+- `blockGasLimit`: override the block gas limit
+- `minGasPrice`: minimum gas price for the next block
+- `networkId`: set the network ID separately from `chainId`
+- `cacheDir`: directory used to cache RPC responses
+- `ownedAccounts`: array of accounts to pre-fund in the genesis block with the
+  fields `secretKey` and `balance`
 
 `Context.createProvider` also accepts an optional logger configuration:
 
@@ -54,8 +52,10 @@ const provider = ctx.createProvider(config, {
   printLineCallback: (msg, replace) => {
     console.log(msg);
   },
-  decodeConsoleLogInputsCallback: (data) => {
-    console.log("console.log:", new TextDecoder().decode(data));
+  decodeConsoleLogInputsCallback: (inputs) => {
+    for (const data of inputs) {
+      console.log("console.log:", new TextDecoder().decode(data));
+    }
   },
   enable: true,
 });
@@ -69,15 +69,15 @@ import { Context } from "./edr/mod.ts";
 using ctx = new Context();
 using provider = ctx.createProvider({
   chain: "op",
-  fork_url: "https://base.llamarpc.com",
-  block_gas_limit: 30_000_000,
+  forkUrl: "https://base.llamarpc.com",
+  blockGasLimit: 30_000_000,
 });
 
 // create a local chain with one funded account
 using local = ctx.createProvider({
-  owned_accounts: [
+  ownedAccounts: [
     {
-      secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
       balance: "0xde0b6b3a7640000",
     },
   ],
@@ -86,14 +86,14 @@ using local = ctx.createProvider({
 // fork Arbitrum and query a contract
 using arb = ctx.createProvider({
   chain: "generic",
-  fork_url: "https://arb1.arbitrum.io/rpc",
-  chain_id: 42161,
+  forkUrl: "https://arb1.arbitrum.io/rpc",
+  chainId: 42161,
   hardfork: "cancun",
-  bail_on_call_failure: true,
+  bailOnCallFailure: true,
   chains: [
     {
-      chain_id: 42161,
-      hardforks: [{ block_number: 0, spec_id: "cancun" }],
+      chainId: 42161,
+      hardforks: [{ blockNumber: 0, specId: "cancun" }],
     },
   ],
 });

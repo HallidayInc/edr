@@ -4,7 +4,7 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use core::str::FromStr;
 use deno_bindgen::deno_bindgen;
 use edr_eth::{
-    U256,
+    Bytes, U256,
     l1::{self, L1ChainSpec},
     signature::{DangerousSecretKeyStr, secret_key_from_str},
 };
@@ -64,6 +64,7 @@ impl Default for Chain {
 }
 
 #[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 struct ProviderOptions {
     #[serde(default)]
     fork_url: Option<String>,
@@ -100,24 +101,28 @@ struct ProviderOptions {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HardforkActivation {
     block_number: u64,
     spec_id: String,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChainConfig {
     chain_id: u64,
     hardforks: Vec<HardforkActivation>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HttpHeader {
     name: String,
     value: String,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OwnedAccount {
     secret_key: String,
     balance: String,
@@ -160,6 +165,18 @@ impl FfiLogger {
             }
         }
     }
+
+    fn send_inputs(&self, inputs: &[Bytes]) {
+        if let Some(cb) = self.decode_cb {
+            let mut data = Vec::new();
+            data.extend_from_slice(&(inputs.len() as u32).to_le_bytes());
+            for input in inputs {
+                data.extend_from_slice(&(input.len() as u32).to_le_bytes());
+                data.extend_from_slice(input);
+            }
+            cb(data.as_ptr(), data.len());
+        }
+    }
 }
 
 impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> for FfiLogger {
@@ -200,11 +217,7 @@ impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> fo
         _transaction: &ChainSpecT::SignedTransaction,
         result: &edr_provider::CallResult<ChainSpecT::HaltReason>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(cb) = self.decode_cb {
-            for input in &result.console_log_inputs {
-                cb(input.as_ptr(), input.len());
-            }
-        }
+        self.send_inputs(&result.console_log_inputs);
         Ok(())
     }
 
@@ -214,12 +227,8 @@ impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> fo
         _tx: &ChainSpecT::SignedTransaction,
         results: &[edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(cb) = self.decode_cb {
-            for r in results {
-                for input in &r.console_log_inputs {
-                    cb(input.as_ptr(), input.len());
-                }
-            }
+        for r in results {
+            self.send_inputs(&r.console_log_inputs);
         }
         Ok(())
     }
@@ -229,11 +238,7 @@ impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> fo
         _hardfork: ChainSpecT::Hardfork,
         result: &edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(cb) = self.decode_cb {
-            for input in &result.console_log_inputs {
-                cb(input.as_ptr(), input.len());
-            }
-        }
+        self.send_inputs(&result.console_log_inputs);
         Ok(())
     }
 
@@ -242,12 +247,8 @@ impl<ChainSpecT: edr_evm::spec::RuntimeSpec> edr_provider::Logger<ChainSpecT> fo
         _hardfork: ChainSpecT::Hardfork,
         results: &[edr_provider::DebugMineBlockResultForChainSpec<ChainSpecT>],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(cb) = self.decode_cb {
-            for r in results {
-                for input in &r.console_log_inputs {
-                    cb(input.as_ptr(), input.len());
-                }
-            }
+        for r in results {
+            self.send_inputs(&r.console_log_inputs);
         }
         Ok(())
     }
@@ -511,17 +512,23 @@ pub fn provider_new(
                 }
             }
             if let Some(chains) = opts.chains {
-                for c in chains {
-                    let mut activations = Vec::new();
-                    for hf in c.hardforks {
-                        if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                            activations
-                                .push((hardfork::ForkCondition::Block(hf.block_number), spec));
-                        }
+                if chains.is_empty() {
+                    if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {
+                        cfg.chains.insert(cfg.chain_id, acts.clone());
                     }
-                    if !activations.is_empty() {
-                        cfg.chains
-                            .insert(c.chain_id, hardfork::Activations::new(activations));
+                } else {
+                    for c in chains {
+                        let mut activations = Vec::new();
+                        for hf in c.hardforks {
+                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
+                                activations
+                                    .push((hardfork::ForkCondition::Block(hf.block_number), spec));
+                            }
+                        }
+                        if !activations.is_empty() {
+                            cfg.chains
+                                .insert(c.chain_id, hardfork::Activations::new(activations));
+                        }
                     }
                 }
             } else if let Some(acts) = l1_hardfork::chain_hardfork_activations(1) {

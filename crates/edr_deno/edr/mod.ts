@@ -16,13 +16,19 @@ function resolveLib(): URL {
 }
 
 const dylib = Deno.dlopen(resolveLib(), {
-  context_new: { parameters: [], result: 'u32' },
-  context_drop: { parameters: ['u32'], result: 'void' },
-  version: { parameters: [], result: 'pointer' },
-  provider_new: { parameters: ['u32', 'pointer', 'usize', 'pointer', 'pointer', 'u8'], result: 'u32' },
-  provider_handle_request: { parameters: ['u32', 'pointer', 'usize'], result: 'pointer' },
-  provider_set_verbose_tracing: { parameters: ['u32', 'u8'], result: 'void' },
-  provider_drop: { parameters: ['u32'], result: 'void' },
+  context_new: { parameters: [], result: "u32" },
+  context_drop: { parameters: ["u32"], result: "void" },
+  version: { parameters: [], result: "pointer" },
+  provider_new: {
+    parameters: ["u32", "pointer", "usize", "pointer", "pointer", "u8"],
+    result: "u32",
+  },
+  provider_handle_request: {
+    parameters: ["u32", "pointer", "usize"],
+    result: "pointer",
+  },
+  provider_set_verbose_tracing: { parameters: ["u32", "u8"], result: "void" },
+  provider_drop: { parameters: ["u32"], result: "void" },
 });
 
 function encode(str: string): Uint8Array {
@@ -32,11 +38,23 @@ function encode(str: string): Uint8Array {
 function decode(ptr: Deno.PointerValue): string {
   if (ptr === null) return "";
   const view = new Deno.UnsafePointerView(ptr);
-  const len =
-    (view.getUint8(0) << 24) | (view.getUint8(1) << 16) | (view.getUint8(2) << 8) | view.getUint8(3);
+  const len = (view.getUint8(0) << 24) | (view.getUint8(1) << 16) |
+    (view.getUint8(2) << 8) | view.getUint8(3);
   const all = new Uint8Array(view.getArrayBuffer(4 + len));
   const text = new TextDecoder().decode(all.subarray(4));
   return text;
+}
+
+function stringifyBigInts(value: unknown): string {
+  return JSON.stringify(value, (_k, v) => {
+    if (typeof v === "bigint") {
+      if (v <= BigInt(Number.MAX_SAFE_INTEGER)) {
+        return Number(v);
+      }
+      return v.toString();
+    }
+    return v;
+  });
 }
 
 export function context_new(): number {
@@ -63,17 +81,34 @@ export function provider_new(
   const ptr = Deno.UnsafePointer.of(data);
   const cb = logCb ?? null;
   const dec = decodeCb ?? null;
-  return dylib.symbols.provider_new(ctx, ptr, BigInt(data.length), cb, dec, enable);
+  return dylib.symbols.provider_new(
+    ctx,
+    ptr,
+    BigInt(data.length),
+    cb,
+    dec,
+    enable,
+  );
 }
 
-export async function provider_handle_request(id: number, req: string): Promise<string> {
+export async function provider_handle_request(
+  id: number,
+  req: string,
+): Promise<string> {
   const data = encode(req);
   const ptrIn = Deno.UnsafePointer.of(data);
-  const ptr = dylib.symbols.provider_handle_request(id, ptrIn, BigInt(data.length));
+  const ptr = dylib.symbols.provider_handle_request(
+    id,
+    ptrIn,
+    BigInt(data.length),
+  );
   return decode(ptr);
 }
 
-export function provider_set_verbose_tracing(id: number, enabled: number): void {
+export function provider_set_verbose_tracing(
+  id: number,
+  enabled: number,
+): void {
   dylib.symbols.provider_set_verbose_tracing(id, enabled);
 }
 
@@ -100,9 +135,10 @@ export class Context {
     logger?: {
       enable?: boolean;
       printLineCallback?: (msg: string, replace: boolean) => void;
-      decodeConsoleLogInputsCallback?: (data: Uint8Array) => void;
+      decodeConsoleLogInputsCallback?: (inputs: Uint8Array[]) => void;
     },
   ): Provider {
+    const json = stringifyBigInts(config);
     let callbackPtr: Deno.PointerValue | null = null;
     let callback: Deno.UnsafeCallback | null = null;
     let decodePtr: Deno.PointerValue | null = null;
@@ -110,8 +146,8 @@ export class Context {
     const enabled = logger?.enable !== false;
     if (logger?.printLineCallback) {
       callback = new Deno.UnsafeCallback({
-        parameters: ['pointer', 'usize', 'u8'] as const,
-        result: 'void' as const,
+        parameters: ["pointer", "usize", "u8"] as const,
+        result: "void" as const,
       }, (ptr: Deno.PointerValue, len: bigint, replace: number) => {
         const view = new Deno.UnsafePointerView(ptr!);
         const bytes = new Uint8Array(view.getArrayBuffer(Number(len)));
@@ -122,18 +158,33 @@ export class Context {
     }
     if (logger?.decodeConsoleLogInputsCallback) {
       decodeCb = new Deno.UnsafeCallback({
-        parameters: ['pointer', 'usize'] as const,
-        result: 'void' as const,
+        parameters: ["pointer", "usize"] as const,
+        result: "void" as const,
       }, (ptr: Deno.PointerValue, len: bigint) => {
         const view = new Deno.UnsafePointerView(ptr!);
         const bytes = new Uint8Array(view.getArrayBuffer(Number(len)));
-        logger.decodeConsoleLogInputsCallback!(bytes);
+        const dv = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength,
+        );
+        let offset = 0;
+        const count = dv.getUint32(offset, true);
+        offset += 4;
+        const inputs: Uint8Array[] = [];
+        for (let i = 0; i < count; i++) {
+          const l = dv.getUint32(offset, true);
+          offset += 4;
+          inputs.push(bytes.slice(offset, offset + l));
+          offset += l;
+        }
+        logger.decodeConsoleLogInputsCallback!(inputs);
       }) as unknown as Deno.UnsafeCallback;
       decodePtr = decodeCb.pointer;
     }
     const id = provider_new(
       this.#id,
-      JSON.stringify(config),
+      json,
       callbackPtr,
       decodePtr,
       enabled ? 1 : 0,
@@ -156,14 +207,18 @@ export class Provider {
   #id: number;
   #callback: Deno.UnsafeCallback | null;
   #decode: Deno.UnsafeCallback | null;
-  constructor(id: number, cb: Deno.UnsafeCallback | null, dec: Deno.UnsafeCallback | null) {
+  constructor(
+    id: number,
+    cb: Deno.UnsafeCallback | null,
+    dec: Deno.UnsafeCallback | null,
+  ) {
     this.#id = id;
     this.#callback = cb;
     this.#decode = dec;
     providerFinalizer.register(this, this.#id);
   }
   async handleRequest(req: unknown): Promise<unknown> {
-    const res = await provider_handle_request(this.#id, JSON.stringify(req));
+    const res = await provider_handle_request(this.#id, stringifyBigInts(req));
     return JSON.parse(res);
   }
   setVerboseTracing(enabled: boolean) {

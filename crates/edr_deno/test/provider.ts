@@ -1,4 +1,7 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { Context, version } from "../edr/mod.ts";
 
 Deno.test("version exports a string", () => {
@@ -10,7 +13,12 @@ Deno.test("manual cleanup works", async () => {
   const ctx = new Context();
   const provider = ctx.createProvider({ chain: "l1" });
   try {
-    const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
+    const req = {
+      id: 1,
+      jsonrpc: "2.0",
+      method: "eth_blockNumber",
+      params: [],
+    };
     const res = await provider.handleRequest(req) as any;
     assert("result" in res);
   } finally {
@@ -54,7 +62,7 @@ Deno.test("decode logs callback", async () => {
   const decoded: Uint8Array[] = [];
   using p = ctx.createProvider(
     { chain: "l1" },
-    { decodeConsoleLogInputsCallback: (d) => decoded.push(d) },
+    { decodeConsoleLogInputsCallback: (inputs) => decoded.push(...inputs) },
   );
   await p.handleRequest({
     id: 1,
@@ -75,9 +83,10 @@ Deno.test("decode logs callback", async () => {
 Deno.test("genesis account balance", async () => {
   using ctx = new Context();
   using p = ctx.createProvider({
-    owned_accounts: [
+    ownedAccounts: [
       {
-        secret_key: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        secretKey:
+          "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
         balance: "0xde0b6b3a7640000",
       },
     ],
@@ -95,7 +104,7 @@ Deno.test("genesis account balance", async () => {
 
 Deno.test("chain id override", async () => {
   using ctx = new Context();
-  using p = ctx.createProvider({ chain: "l1", chain_id: 10, network_id: 100 });
+  using p = ctx.createProvider({ chain: "l1", chainId: 10n, networkId: 100n });
 
   const cid = await p.handleRequest({
     id: 1,
@@ -119,10 +128,13 @@ Deno.test("arbitrum fork eth_call", async () => {
   using ctx = new Context();
   using arb = ctx.createProvider({
     chain: "generic",
-    fork_url: "https://arb1.arbitrum.io/rpc",
-    chain_id: 42161,
+    forkUrl: "https://arb1.arbitrum.io/rpc",
+    chainId: 42161,
     hardfork: "cancun",
-    chains: [{ chain_id: 42161, hardforks: [{ block_number: 0, spec_id: "cancun" }] }],
+    chains: [{
+      chainId: 42161,
+      hardforks: [{ blockNumber: 0, specId: "cancun" }],
+    }],
   });
   const call = {
     id: 1,
@@ -131,7 +143,8 @@ Deno.test("arbitrum fork eth_call", async () => {
     params: [
       {
         to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
-        data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+        data:
+          "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
       },
       "latest",
     ],
@@ -144,18 +157,18 @@ Deno.test("arbitrum fork eth_call", async () => {
 
 Deno.test("realish setup", async () => {
   const config = {
-    allow_blocks_with_same_timestamp: true,
-    allow_unlimited_contract_size: true,
-    bail_on_call_failure: true,
-    bail_on_transaction_failure: true,
-    block_gas_limit: 36000000n,
+    allowBlocksWithSameTimestamp: true,
+    allowUnlimitedContractSize: true,
+    bailOnCallFailure: true,
+    bailOnTransactionFailure: true,
+    blockGasLimit: 36000000n,
     chain: "generic",
-    chain_id: 42161n,
+    chainId: 42161n,
     chains: [],
-    fork_url: "https://arb1.arbitrum.io/rpc",
+    forkUrl: "https://arb1.arbitrum.io/rpc",
     hardfork: "cancun",
-    min_gas_price: 0n,
-    network_id: 42161n,
+    minGasPrice: 0n,
+    networkId: 42161n,
   };
   using ctx = new Context();
   using arb = ctx.createProvider(config);
@@ -166,7 +179,8 @@ Deno.test("realish setup", async () => {
     params: [
       {
         to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
-        data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+        data:
+          "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
       },
       "latest",
     ],
