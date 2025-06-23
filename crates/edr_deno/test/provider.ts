@@ -20,7 +20,8 @@ Deno.test("manual cleanup works", async () => {
       params: [],
     };
     const res = await provider.handleRequest(req) as any;
-    assert("result" in res);
+    const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+    assert("result" in data);
   } finally {
     provider.close();
     ctx.close();
@@ -35,8 +36,10 @@ Deno.test("multiple providers work", async () => {
   const req = { id: 1, jsonrpc: "2.0", method: "eth_blockNumber", params: [] };
   const r1 = await p1.handleRequest(req) as any;
   const r2 = await p2.handleRequest(req) as any;
-  assert("result" in r1);
-  assertEquals(r1.result, r2.result);
+  const d1 = typeof r1.data === "string" ? JSON.parse(r1.data) : r1.data;
+  const d2 = typeof r2.data === "string" ? JSON.parse(r2.data) : r2.data;
+  assert("result" in d1);
+  assertEquals(d1.result, d2.result);
   // resources cleaned up by using
 });
 
@@ -98,7 +101,8 @@ Deno.test("genesis account balance", async () => {
     params: ["0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266", "latest"],
   };
   const res = await p.handleRequest(req) as any;
-  assertEquals(res.result.toLowerCase(), "0xde0b6b3a7640000");
+  const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  assertEquals(data.result.toLowerCase(), "0xde0b6b3a7640000");
   // auto dispose
 });
 
@@ -120,8 +124,10 @@ Deno.test("chain id override", async () => {
     params: [],
   }) as any;
 
-  assertEquals(cid.result, "0xa");
-  assertEquals(nid.result, "100");
+  const cidData = typeof cid.data === "string" ? JSON.parse(cid.data) : cid.data;
+  const nidData = typeof nid.data === "string" ? JSON.parse(nid.data) : nid.data;
+  assertEquals(cidData.result, "0xa");
+  assertEquals(nidData.result, "100");
 });
 
 Deno.test("arbitrum fork eth_call", async () => {
@@ -150,7 +156,8 @@ Deno.test("arbitrum fork eth_call", async () => {
     ],
   };
   const res = await arb.handleRequest(call) as any;
-  const bal = BigInt(res.result);
+  const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  const bal = BigInt(data.result);
   assert(bal > 0n);
   // automatically disposed
 });
@@ -187,6 +194,7 @@ Deno.test("realish setup", async () => {
   };
   const res = await arb.handleRequest(call) as any;
   console.log(res);
-  const bal = BigInt(res.result);
+  const data = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+  const bal = BigInt(data.result);
   assert(bal > 0n);
 });

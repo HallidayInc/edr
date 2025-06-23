@@ -120,8 +120,14 @@ const ctxFinalizer = new FinalizationRegistry<number>((id) => {
   dylib.symbols.context_drop(id);
 });
 
-const providerFinalizer = new FinalizationRegistry<number>((id) => {
-  dylib.symbols.provider_drop(id);
+const providerFinalizer = new FinalizationRegistry<{
+  id: number;
+  cb: Deno.UnsafeCallback | null;
+  dec: Deno.UnsafeCallback | null;
+}>((info) => {
+  dylib.symbols.provider_drop(info.id);
+  info.cb?.close();
+  info.dec?.close();
 });
 
 export class Context {
@@ -215,11 +221,11 @@ export class Provider {
     this.#id = id;
     this.#callback = cb;
     this.#decode = dec;
-    providerFinalizer.register(this, this.#id);
+    providerFinalizer.register(this, { id: this.#id, cb, dec });
   }
   async handleRequest(req: unknown): Promise<unknown> {
     const res = await provider_handle_request(this.#id, stringifyBigInts(req));
-    return JSON.parse(res);
+    return { data: res };
   }
   setVerboseTracing(enabled: boolean) {
     provider_set_verbose_tracing(this.#id, enabled ? 1 : 0);

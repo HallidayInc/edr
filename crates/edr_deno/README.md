@@ -112,6 +112,8 @@ const call = JSON.stringify({
   ],
 });
 const res = await arb.handleRequest(JSON.parse(call));
+const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
+// `res.data` holds the JSON-RPC response string
 ```
 
 Both `Context` and `Provider` implement synchronous and asynchronous disposers,
