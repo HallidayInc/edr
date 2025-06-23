@@ -141,3 +141,38 @@ Deno.test("arbitrum fork eth_call", async () => {
   assert(bal > 0n);
   // automatically disposed
 });
+
+Deno.test("realish setup", async () => {
+  const config = {
+    allow_blocks_with_same_timestamp: true,
+    allow_unlimited_contract_size: true,
+    bail_on_call_failure: true,
+    bail_on_transaction_failure: true,
+    block_gas_limit: 36000000n,
+    chain: "generic",
+    chain_id: 42161n,
+    chains: [],
+    fork_url: "https://arb1.arbitrum.io/rpc",
+    hardfork: "cancun",
+    min_gas_price: 0n,
+    network_id: 42161n,
+  };
+  using ctx = new Context();
+  using arb = ctx.createProvider(config);
+  const call = {
+    id: 1,
+    jsonrpc: "2.0",
+    method: "eth_call",
+    params: [
+      {
+        to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
+        data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+      },
+      "latest",
+    ],
+  };
+  const res = await arb.handleRequest(call) as any;
+  console.log(res);
+  const bal = BigInt(res.result);
+  assert(bal > 0n);
+});
