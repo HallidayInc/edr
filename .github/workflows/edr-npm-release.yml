@@ -9,19 +9,6 @@ permissions:
   contents: write
   id-token: write
 on:
-  push:
-    branches:
-      - main
-      - prerelease
-    tags-ignore:
-      - "**"
-    paths-ignore:
-      - "**/*.md"
-      - LICENSE
-      - "**/*.gitignore"
-      - .editorconfig
-      - docs/**
-  pull_request: null
   workflow_dispatch:
 
 jobs:
