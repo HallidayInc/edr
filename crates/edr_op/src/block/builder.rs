@@ -92,31 +92,35 @@ where
                     let parent_header = parent_block.header();
                     let extra_data = &parent_header.extra_data;
 
-                    let version = *extra_data.first()
-                        .expect("Extra data should have at least 1 byte for version");
+                    // If the parent extra data encodes dynamic base fee params using our
+                    // expected versioned format, decode it. Otherwise, gracefully fall back
+                    // to the chain's configured constants instead of panicking.
+                    if extra_data.len() >= 9
+                        && extra_data[0] == DYNAMIC_BASE_FEE_PARAM_VERSION
+                    {
+                        let denominator_bytes: [u8; 4] = extra_data[1..=4]
+                            .try_into()
+                            .expect("The slice should be exactly 4 bytes");
 
-                    let base_fee_params = match version {
-                        DYNAMIC_BASE_FEE_PARAM_VERSION => {
-                            let denominator_bytes: [u8; 4] = extra_data[1..=4]
-                                .try_into()
-                                .expect("The slice should be exactly 4 bytes");
+                        let elasticity_bytes: [u8; 4] = extra_data[5..=8]
+                            .try_into()
+                            .expect("The slice should be exactly 4 bytes");
 
-                            let elasticity_bytes: [u8; 4] = extra_data[5..=8]
-                                .try_into()
-                                .expect("The slice should be exactly 4 bytes");
+                        Ok(ConstantBaseFeeParams {
+                            max_change_denominator: u32::from_be_bytes(denominator_bytes).into(),
+                            elasticity_multiplier: u32::from_be_bytes(elasticity_bytes).into(),
+                        })
+                    } else {
+                        // Parent does not contain our encoded params (e.g. pre-upgrade or
+                        // non-standard extra data). Use the configured constants.
+                        let base_fee_params = *OpChainSpec::BASE_FEE_PARAMS
+                            .at_hardfork(cfg.spec)
+                            .expect(
+                                "Chain spec must have base fee params for post-London hardforks",
+                            );
 
-                            ConstantBaseFeeParams {
-                                max_change_denominator: u32::from_be_bytes(denominator_bytes)
-                                    .into(),
-                                elasticity_multiplier: u32::from_be_bytes(elasticity_bytes).into(),
-                            }
-                        }
-                        _ => panic!(
-                            "Unsupported base fee params version: {version}. Expected {DYNAMIC_BASE_FEE_PARAM_VERSION}."
-                        )
-                    };
-
-                    Ok(base_fee_params)
+                        Ok(base_fee_params)
+                    }
                 } else {
                     // Use the prior EIP-1559 constants.
                     let base_fee_params = *OpChainSpec::BASE_FEE_PARAMS
