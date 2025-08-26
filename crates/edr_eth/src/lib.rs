@@ -62,3 +62,6 @@ pub use self::block_spec::{BlockSpec, BlockTag, Eip1898BlockSpec, PreEip1898Bloc
 pub type Secret = B256;
 /// A public key
 pub type Public = B512;
+
+// Default gas estimate adjuster for L1: no change
+impl edr_utils::GasEstimateAdjuster for l1::L1ChainSpec {}

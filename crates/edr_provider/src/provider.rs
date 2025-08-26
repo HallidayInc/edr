@@ -190,7 +190,7 @@ impl<
                                    + TransactionValidation<
                 ValidationError: From<l1::InvalidTransaction> + PartialEq,
             >,
-        >,
+        > + edr_utils::GasEstimateAdjuster,
         TimerT: Clone + TimeSinceEpoch,
     > Provider<ChainSpecT, TimerT>
 {

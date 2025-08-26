@@ -20,3 +20,6 @@ pub const CHAIN_TYPE: &str = "generic";
 /// - it allows missing `blob_gas` fields in Cancun or above
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct GenericChainSpec;
+
+// Default: no gas estimate adjustment for the Generic chain spec.
+impl edr_utils::GasEstimateAdjuster for GenericChainSpec {}

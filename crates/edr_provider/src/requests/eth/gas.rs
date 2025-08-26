@@ -25,7 +25,7 @@ pub fn handle_estimate_gas<
                                + TransactionValidation<
             ValidationError: From<l1::InvalidTransaction> + PartialEq,
         >,
-    >,
+    > + edr_utils::GasEstimateAdjuster,
     TimerT: Clone + TimeSinceEpoch,
 >(
     data: &mut ProviderData<ChainSpecT, TimerT>,

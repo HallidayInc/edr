@@ -2553,7 +2553,7 @@ where
                                + TransactionValidation<
             ValidationError: From<l1::InvalidTransaction> + PartialEq,
         >,
-    >,
+    > + edr_utils::GasEstimateAdjuster,
     TimerT: Clone + TimeSinceEpoch,
 {
     /// Estimate the gas cost of a transaction. Matches Hardhat behavior.
@@ -2650,17 +2650,19 @@ where
                 trace_collector: &mut trace_collector,
             })?;
 
-            // Return the initial estimation if it was successful
+            // Return the initial estimation if it was successful, after applying
+            // chain-specific adjustment and clamping to the block gas limit.
             if success {
+                let adjusted = adjust_gas_estimate_for_chain::<ChainSpecT>(initial_estimation)
+                    .min(header.gas_limit);
                 return Ok(EstimateGasResult {
-                    estimation: initial_estimation,
+                    estimation: adjusted,
                     traces: trace_collector.into_traces(),
                 });
             }
 
-            // Correct the initial estimation if the transaction failed with the actually
-            // used gas limit. This can happen if the execution logic is based
-            // on the available gas.
+            // Correct the initial estimation if the transaction failed with the actually used gas limit.
+            // This can happen if the execution logic is based on the available gas.
             let estimation = gas::binary_search_estimation(BinarySearchEstimationArgs {
                 blockchain,
                 header,
@@ -2673,10 +2675,21 @@ where
                 trace_collector: &mut trace_collector,
             })?;
 
+            // Apply chain-specific adjustment and clamp to block gas limit.
+            let adjusted = adjust_gas_estimate_for_chain::<ChainSpecT>(estimation)
+                .min(header.gas_limit);
+
             let traces = trace_collector.into_traces();
-            Ok(EstimateGasResult { estimation, traces })
+            Ok(EstimateGasResult { estimation: adjusted, traces })
         })?
     }
+}
+
+// Apply minimal OP-chain-specific adjustments to gas estimates.
+fn adjust_gas_estimate_for_chain<ChainSpecT: edr_utils::GasEstimateAdjuster>(
+    estimate: u64,
+) -> u64 {
+    ChainSpecT::adjust_estimate_gas(estimate)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
