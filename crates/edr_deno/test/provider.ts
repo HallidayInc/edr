@@ -186,7 +186,7 @@ Deno.test("arbitrum fork eth_call", async () => {
     const rpcUrl = "https://arb1.arbitrum.io/rpc";
     using ctx = new Context();
     using arb = ctx.createProvider({
-        chain: "generic",
+        chain: "arb",
         fork: {
             jsonRpcUrl: rpcUrl,
             blockNumber: await fetchRecentBlockNumber(rpcUrl),
@@ -258,7 +258,7 @@ Deno.test("realish setup", async () => {
         bailOnCallFailure: true,
         bailOnTransactionFailure: true,
         blockGasLimit: 36000000n,
-        chain: "generic",
+        chain: "arb",
         chainId: 42161n,
         chains: [],
         fork: { jsonRpcUrl: "https://arb1.arbitrum.io/rpc" },

@@ -2,12 +2,12 @@ use derive_where::derive_where;
 use edr_block_api::{Block, BlockAndTotalDifficulty};
 use edr_block_header::{BlobGas, BlockHeader, Withdrawal};
 use edr_evm::{spec::RuntimeSpec, EthBlockData};
-use edr_evm_spec::ExecutableTransaction;
+use edr_evm_spec::{ChainSpec, ExecutableTransaction};
 use edr_primitives::{Address, Bloom, Bytes, B256, B64, U256};
 use edr_rpc_spec::{GetBlockNumber, RpcEthBlock};
 use serde::{Deserialize, Serialize};
 
-use crate::GenericChainSpec;
+use crate::{transaction::SignedWithFallbackToPostEip155, GenericChainSpecFamily};
 
 /// block object returned by `eth_getBlockBy*`
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -138,14 +138,15 @@ pub enum ConversionError<ChainSpecT: RuntimeSpec> {
     Transaction(ChainSpecT::RpcTransactionConversionError),
 }
 
-impl<TransactionT> TryFrom<GenericRpcBlock<TransactionT>> for EthBlockData<GenericChainSpec>
+impl<ChainSpecT, TransactionT> TryFrom<GenericRpcBlock<TransactionT>> for EthBlockData<ChainSpecT>
 where
-    TransactionT: TryInto<
-        crate::transaction::SignedWithFallbackToPostEip155,
-        Error = crate::rpc::transaction::ConversionError,
-    >,
+    ChainSpecT: GenericChainSpecFamily
+        + ChainSpec<SignedTransaction = SignedWithFallbackToPostEip155>
+        + RuntimeSpec<RpcTransactionConversionError = crate::rpc::transaction::ConversionError>,
+    TransactionT:
+        TryInto<SignedWithFallbackToPostEip155, Error = crate::rpc::transaction::ConversionError>,
 {
-    type Error = ConversionError<GenericChainSpec>;
+    type Error = ConversionError<ChainSpecT>;
 
     fn try_from(value: GenericRpcBlock<TransactionT>) -> Result<Self, Self::Error> {
         let header = BlockHeader {
@@ -182,7 +183,7 @@ where
             .transactions
             .into_iter()
             .map(TryInto::try_into)
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<ChainSpecT::SignedTransaction>, _>>()
             .map_err(ConversionError::Transaction)?;
 
         let hash = value.hash.ok_or(ConversionError::MissingHash)?;
@@ -286,7 +287,7 @@ mod tests {
         }"#;
 
         type BlockResponsePayload =
-            <GenericChainSpec as RpcSpec>::RpcBlock<TransactionWithSignature>;
+            <GenericChainSpec as RpcSpec>::RpcBlock<TransactionWithSignature<GenericChainSpec>>;
 
         let response: jsonrpc::Response<BlockResponsePayload> = serde_json::from_str(DATA).unwrap();
         let rpc_block = match response.data {

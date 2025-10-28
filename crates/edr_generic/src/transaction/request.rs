@@ -1,16 +1,20 @@
+use std::marker::PhantomData;
+
 use edr_chain_l1::rpc::{call::L1CallRequest, TransactionRequest};
 use edr_evm_spec::EvmSpecId;
 use edr_provider::{
     calculate_eip1559_fee_parameters,
     requests::validation::{validate_call_request, validate_send_transaction_request},
-    spec::{CallContext, FromRpcType, TransactionContext},
+    spec::{CallContext, FromRpcType, SyncProviderSpec, TransactionContext},
     time::TimeSinceEpoch,
     ProviderError, ProviderErrorForChainSpec,
 };
 use edr_signer::{FakeSign, SecretKey, Sign, SignatureError};
 use edr_transaction::{Address, Bytes, TxKind, U256};
 
-use crate::{transaction::SignedWithFallbackToPostEip155, GenericChainSpec};
+use crate::{
+    transaction::SignedWithFallbackToPostEip155, GenericChainSpec, GenericChainSpecFamily,
+};
 
 /// Container type for various Ethereum transaction requests.
 // NOTE: This is a newtype only because the default FromRpcType implementation
@@ -18,23 +22,41 @@ use crate::{transaction::SignedWithFallbackToPostEip155, GenericChainSpec};
 // wanting the same logic, we need to use our own type and copy the
 // implementation.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Request(edr_chain_l1::L1TransactionRequest);
+pub struct Request<ChainSpecT = GenericChainSpec>
+where
+    ChainSpecT: GenericChainSpecFamily,
+{
+    inner: edr_chain_l1::L1TransactionRequest,
+    _marker: PhantomData<ChainSpecT>,
+}
 
-impl From<edr_chain_l1::L1TransactionRequest> for Request {
+impl<ChainSpecT> From<edr_chain_l1::L1TransactionRequest> for Request<ChainSpecT>
+where
+    ChainSpecT: GenericChainSpecFamily,
+{
     fn from(value: edr_chain_l1::L1TransactionRequest) -> Self {
-        Self(value)
+        Self {
+            inner: value,
+            _marker: PhantomData,
+        }
     }
 }
 
-impl FakeSign for Request {
+impl<ChainSpecT> FakeSign for Request<ChainSpecT>
+where
+    ChainSpecT: GenericChainSpecFamily,
+{
     type Signed = SignedWithFallbackToPostEip155;
 
     fn fake_sign(self, sender: Address) -> SignedWithFallbackToPostEip155 {
-        <edr_chain_l1::L1TransactionRequest as FakeSign>::fake_sign(self.0, sender).into()
+        <edr_chain_l1::L1TransactionRequest as FakeSign>::fake_sign(self.inner, sender).into()
     }
 }
 
-impl Sign for Request {
+impl<ChainSpecT> Sign for Request<ChainSpecT>
+where
+    ChainSpecT: GenericChainSpecFamily,
+{
     type Signed = SignedWithFallbackToPostEip155;
 
     unsafe fn sign_for_sender_unchecked(
@@ -45,22 +67,32 @@ impl Sign for Request {
         // SAFETY: The safety concern is propagated in the function signature.
         unsafe {
             <edr_chain_l1::L1TransactionRequest as Sign>::sign_for_sender_unchecked(
-                self.0, secret_key, caller,
+                self.inner, secret_key, caller,
             )
         }
         .map(Into::into)
     }
 }
 
-impl<TimerT: Clone + TimeSinceEpoch> FromRpcType<L1CallRequest, TimerT> for Request {
-    type Context<'context> = CallContext<'context, GenericChainSpec, TimerT>;
+impl<ChainSpecT, TimerT> FromRpcType<L1CallRequest, TimerT> for Request<ChainSpecT>
+where
+    ChainSpecT: GenericChainSpecFamily
+        + SyncProviderSpec<TimerT>
+        + edr_evm_spec::ChainSpec<
+            SignedTransaction = SignedWithFallbackToPostEip155,
+            BlockEnv = edr_chain_l1::BlockEnv,
+            HaltReason = edr_chain_l1::HaltReason,
+        > + edr_evm_spec::ChainHardfork<Hardfork = edr_chain_l1::Hardfork>,
+    TimerT: Clone + TimeSinceEpoch,
+{
+    type Context<'context> = CallContext<'context, ChainSpecT, TimerT>;
 
-    type Error = ProviderErrorForChainSpec<GenericChainSpec>;
+    type Error = ProviderErrorForChainSpec<ChainSpecT>;
 
     fn from_rpc_type(
         value: L1CallRequest,
         context: Self::Context<'_>,
-    ) -> Result<crate::transaction::Request, ProviderErrorForChainSpec<GenericChainSpec>> {
+    ) -> Result<Self, ProviderErrorForChainSpec<ChainSpecT>> {
         let CallContext {
             data,
             block_spec,
@@ -69,7 +101,7 @@ impl<TimerT: Clone + TimeSinceEpoch> FromRpcType<L1CallRequest, TimerT> for Requ
             max_fees_fn,
         } = context;
 
-        validate_call_request::<GenericChainSpec, TimerT>(data.hardfork(), &value, block_spec)?;
+        validate_call_request::<ChainSpecT, TimerT>(data.hardfork(), &value, block_spec)?;
 
         let L1CallRequest {
             from,
@@ -157,15 +189,25 @@ impl<TimerT: Clone + TimeSinceEpoch> FromRpcType<L1CallRequest, TimerT> for Requ
     }
 }
 
-impl<TimerT: Clone + TimeSinceEpoch> FromRpcType<TransactionRequest, TimerT> for Request {
-    type Context<'context> = TransactionContext<'context, GenericChainSpec, TimerT>;
+impl<ChainSpecT, TimerT> FromRpcType<TransactionRequest, TimerT> for Request<ChainSpecT>
+where
+    ChainSpecT: GenericChainSpecFamily
+        + SyncProviderSpec<TimerT>
+        + edr_evm_spec::ChainSpec<
+            SignedTransaction = SignedWithFallbackToPostEip155,
+            BlockEnv = edr_chain_l1::BlockEnv,
+            HaltReason = edr_chain_l1::HaltReason,
+        > + edr_evm_spec::ChainHardfork<Hardfork = edr_chain_l1::Hardfork>,
+    TimerT: Clone + TimeSinceEpoch,
+{
+    type Context<'context> = TransactionContext<'context, ChainSpecT, TimerT>;
 
-    type Error = ProviderErrorForChainSpec<GenericChainSpec>;
+    type Error = ProviderErrorForChainSpec<ChainSpecT>;
 
     fn from_rpc_type(
         value: TransactionRequest,
         context: Self::Context<'_>,
-    ) -> Result<crate::transaction::Request, ProviderErrorForChainSpec<GenericChainSpec>> {
+    ) -> Result<Self, ProviderErrorForChainSpec<ChainSpecT>> {
         let TransactionContext { data } = context;
 
         validate_send_transaction_request(data, &value)?;

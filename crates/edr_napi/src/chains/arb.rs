@@ -1,0 +1,54 @@
+use std::sync::Arc;
+
+use edr_generic::ArbChainSpec;
+use edr_napi_core::{
+    logger::Logger,
+    provider::{SyncProvider, SyncProviderFactory},
+    subscription::subscriber_callback_for_chain_spec,
+};
+use edr_provider::time::CurrentTime;
+use edr_solidity::contract_decoder::ContractDecoder;
+use napi::tokio::runtime;
+use napi_derive::napi;
+
+use crate::provider::ProviderFactory;
+
+pub struct ArbChainProviderFactory;
+
+impl SyncProviderFactory for ArbChainProviderFactory {
+    fn create_provider(
+        &self,
+        runtime: runtime::Handle,
+        provider_config: edr_napi_core::provider::Config,
+        logger_config: edr_napi_core::logger::Config,
+        subscription_callback: edr_napi_core::subscription::Callback,
+        contract_decoder: Arc<ContractDecoder>,
+    ) -> napi::Result<Arc<dyn SyncProvider>> {
+        let logger =
+            Logger::<ArbChainSpec, CurrentTime>::new(logger_config, Arc::clone(&contract_decoder))?;
+
+        let provider_config =
+            edr_provider::ProviderConfig::<edr_chain_l1::Hardfork>::try_from(provider_config)?;
+
+        let provider = edr_provider::Provider::<ArbChainSpec>::new(
+            runtime.clone(),
+            Box::new(logger),
+            subscriber_callback_for_chain_spec::<ArbChainSpec, CurrentTime>(subscription_callback),
+            provider_config,
+            contract_decoder,
+            CurrentTime,
+        )
+        .map_err(|error| napi::Error::new(napi::Status::GenericFailure, error.to_string()))?;
+
+        Ok(Arc::new(provider))
+    }
+}
+
+#[napi]
+pub const ARB_CHAIN_TYPE: &str = edr_generic::ARB_CHAIN_TYPE;
+
+#[napi(catch_unwind)]
+pub fn arb_chain_provider_factory() -> ProviderFactory {
+    let factory: Arc<dyn SyncProviderFactory> = Arc::new(ArbChainProviderFactory);
+    factory.into()
+}

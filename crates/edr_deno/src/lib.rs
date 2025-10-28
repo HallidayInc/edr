@@ -8,7 +8,7 @@ use edr_block_api::Block as _;
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_evm::hardfork::{self, l1 as l1_hardfork};
 use edr_evm_spec::ExecutableTransaction;
-use edr_generic::GenericChainSpec;
+use edr_generic::{ArbChainSpec, GenericChainSpec};
 use edr_op::{self, OpChainSpec};
 use edr_primitives::{Bytes, HashMap, U256};
 use edr_provider::{
@@ -133,6 +133,7 @@ enum Chain {
     L1,
     Op,
     Generic,
+    Arb,
 }
 
 impl Default for Chain {
@@ -462,6 +463,7 @@ enum ProviderEntry {
     L1(Arc<Provider<L1ChainSpec>>),
     Op(Arc<Provider<OpChainSpec>>),
     Generic(Arc<Provider<GenericChainSpec>>),
+    Arb(Arc<Provider<ArbChainSpec>>),
 }
 
 impl Clone for ProviderEntry {
@@ -470,6 +472,7 @@ impl Clone for ProviderEntry {
             Self::L1(p) => Self::L1(Arc::clone(p)),
             Self::Op(p) => Self::Op(Arc::clone(p)),
             Self::Generic(p) => Self::Generic(Arc::clone(p)),
+            Self::Arb(p) => Self::Arb(Arc::clone(p)),
         }
     }
 }
@@ -903,6 +906,142 @@ pub fn provider_new(
                 Err(_) => return 0,
             }
         }
+        Chain::Arb => {
+            let fork = fork_opts.as_ref().map(|f| {
+                let mut chain_overrides: HashMap<u64, hardfork::ChainOverride<l1::Hardfork>> =
+                    HashMap::new();
+                if let Some(chains) = &opts.chains {
+                    for c in chains {
+                        let mut activations = Vec::new();
+                        for hf in &c.hardforks {
+                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
+                                activations.push(hardfork::Activation {
+                                    condition: hardfork::ForkCondition::Block(hf.block_number),
+                                    hardfork: spec,
+                                });
+                            }
+                        }
+                        if !activations.is_empty() {
+                            chain_overrides.insert(
+                                c.chain_id,
+                                hardfork::ChainOverride {
+                                    name: String::new(),
+                                    hardfork_activation_overrides: Some(
+                                        hardfork::Activations::new(activations),
+                                    ),
+                                },
+                            );
+                        }
+                    }
+                }
+                edr_provider::ForkConfig {
+                    block_number: f.block_number,
+                    cache_dir: opts
+                        .cache_dir
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    chain_overrides,
+                    http_headers: f.http_headers.as_ref().map(|h| {
+                        h.iter()
+                            .map(|h| (h.name.clone(), h.value.clone()))
+                            .collect::<std::collections::HashMap<_, _>>()
+                    }),
+                    url: f.json_rpc_url.clone(),
+                }
+            });
+            let mut cfg = if fork.is_some() {
+                test_utils::create_test_config_with_fork::<l1::Hardfork>(fork)
+            } else {
+                test_utils::create_test_config::<l1::Hardfork>()
+            };
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
+            if let Some(ref name) = opts.hardfork {
+                if let Some(spec) = parse_l1_spec_id(name) {
+                    cfg.hardfork = spec;
+                }
+            }
+            if let Some(chains) = &opts.chains {
+                if chains.is_empty() {
+                    if let Some(acts) = default_l1_activations() {
+                        let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
+                            block_number: None,
+                            cache_dir: PathBuf::new(),
+                            chain_overrides: HashMap::new(),
+                            http_headers: None,
+                            url: String::new(),
+                        });
+                        fork_cfg.chain_overrides.insert(
+                            cfg.chain_id,
+                            hardfork::ChainOverride {
+                                name: String::new(),
+                                hardfork_activation_overrides: Some(acts.clone()),
+                            },
+                        );
+                    }
+                }
+            } else if let Some(acts) = default_l1_activations() {
+                let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
+                    block_number: None,
+                    cache_dir: PathBuf::new(),
+                    chain_overrides: HashMap::new(),
+                    http_headers: None,
+                    url: String::new(),
+                });
+                fork_cfg.chain_overrides.insert(
+                    cfg.chain_id,
+                    hardfork::ChainOverride {
+                        name: String::new(),
+                        hardfork_activation_overrides: Some(acts.clone()),
+                    },
+                );
+            }
+            if !owned_accounts.is_empty() {
+                cfg.owned_accounts = owned_accounts.clone();
+            }
+            if !genesis_state.is_empty() {
+                cfg.genesis_state.extend(genesis_state.clone());
+            }
+            match Provider::<ArbChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(FfiLogger::new(id, log_cb, decode_cb, log_enabled != 0)),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(p) => ProviderEntry::Arb(Arc::new(p)),
+                Err(_) => return 0,
+            }
+        }
     };
 
     PROVIDERS.lock().unwrap().insert(id, entry);
@@ -1021,6 +1160,37 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
+        ProviderEntry::Arb(provider) => {
+            let req: edr_provider::requests::ProviderRequest<ArbChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(error) => {
+                        let msg = error.to_string();
+                        let value = serde_json::Value::from_str(request).ok();
+                        let method = value
+                            .as_ref()
+                            .and_then(|v| v.get("method"))
+                            .and_then(serde_json::Value::as_str);
+                        let reason = InvalidRequestReason::new(method, &msg);
+                        if let Some((name, provider_error)) =
+                            reason.provider_error::<ArbChainSpec, CurrentTime>()
+                        {
+                            let _ = provider.log_failed_deserialization(name, &provider_error);
+                        }
+                        let err = jsonrpc::ResponseData::<()>::Error {
+                            error: jsonrpc::Error {
+                                code: reason.error_code(),
+                                message: reason.error_message(),
+                                data: value,
+                            },
+                        };
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
+            let result = provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
+            serde_json::to_string(&response).unwrap()
+        }
     }
 }
 
@@ -1032,6 +1202,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
             ProviderEntry::L1(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Op(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Arb(p) => p.set_verbose_tracing(enabled != 0),
         }
     }
 }
