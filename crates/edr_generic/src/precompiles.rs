@@ -1,4 +1,4 @@
-use std::{boxed::Box, iter};
+use std::boxed::Box;
 
 use alloy_primitives::Log;
 use alloy_sol_types::{Revert, SolCall, SolError, SolEvent, SolValue, sol};
@@ -10,12 +10,28 @@ use edr_primitives::{Address, B256, Bytes, U256, address, keccak256};
 use revm_handler::PrecompileProvider;
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
 
+use crate::{APE_APY_SLOT, APE_PRECOMPILE_STATE_ADDRESS, APE_SHARE_COUNT_SLOT, APE_SHARE_PRICE_SLOT};
+
 const ARBSYS_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
+const ARBINFO_ADDRESS: Address = address!("0000000000000000000000000000000000000065");
+const ARBOWNERPUBLIC_ADDRESS: Address = address!("000000000000000000000000000000000000006b");
 const ARBSYS_STATE_ADDRESS: Address = address!("00000000000000000000000000000000A4B05A11");
 const ADDRESS_ALIAS_OFFSET: Address = address!("1111000000000000000000000000000000001111");
 const PARTIALS_SLOT_START: u64 = 2;
+const APE_DEFAULT_SHARE_PRICE: u64 = 1;
 
 sol! {
+    interface ArbInfo {
+        function getBalance(address account) external view returns (uint256);
+        function getCode(address account) external view returns (bytes memory);
+        function getBalanceValues(address account) external view returns (uint256, uint256, uint256);
+        function getYieldConfiguration(address account) external view returns (uint8);
+        function getDelegate(address account) external view returns (address);
+        function configureAutomaticYield() external;
+        function configureVoidYield() external;
+        function configureDelegateYield(address account) external;
+    }
+
     interface ArbSys {
         function arbBlockNumber() external view returns (uint256);
         function arbBlockHash(uint256 arbBlockNum) external view returns (bytes32);
@@ -50,8 +66,49 @@ sol! {
 
         error InvalidBlockNumber(uint256 requested, uint256 current);
     }
+
+    interface ArbOwnerPublic {
+        function isChainOwner(address addr) external view returns (bool);
+        function rectifyChainOwner(address ownerToRectify) external;
+        function getAllChainOwners() external view returns (address[] memory);
+        function getNativeTokenManagementFrom() external view returns (uint64);
+        function isNativeTokenOwner(address addr) external view returns (bool);
+        function getAllNativeTokenOwners() external view returns (address[] memory);
+        function getTransactionFilteringFrom() external view returns (uint64);
+        function isTransactionFilterer(address filterer) external view returns (bool);
+        function getAllTransactionFilterers() external view returns (address[] memory);
+        function getFilteredFundsRecipient() external view returns (address);
+        function getNetworkFeeAccount() external view returns (address);
+        function getInfraFeeAccount() external view returns (address);
+        function getBrotliCompressionLevel() external view returns (uint64);
+        function getParentGasFloorPerToken() external view returns (uint64);
+        function getScheduledUpgrade() external view returns (uint64 arbosVersion, uint64 scheduledForTimestamp);
+        function isCalldataPriceIncreaseEnabled() external view returns (bool);
+        function getCollectTips() external view returns (bool);
+        function getMaxStylusContractFragments() external view returns (uint8);
+        function getSharePrice() external view returns (uint64);
+        function getShareCount() external view returns (uint256);
+        function getApy() external view returns (uint64);
+
+        event ChainOwnerRectified(address rectifiedOwner);
+    }
 }
 
+use self::ArbInfo::{
+    configureAutomaticYieldCall, configureDelegateYieldCall, configureVoidYieldCall,
+    getBalanceCall, getBalanceValuesCall, getCodeCall, getDelegateCall,
+    getYieldConfigurationCall,
+};
+use self::ArbOwnerPublic::{
+    ChainOwnerRectified, getAllChainOwnersCall, getAllNativeTokenOwnersCall,
+    getAllTransactionFilterersCall, getBrotliCompressionLevelCall, getCollectTipsCall,
+    getFilteredFundsRecipientCall, getInfraFeeAccountCall, getMaxStylusContractFragmentsCall,
+    getNativeTokenManagementFromCall, getNetworkFeeAccountCall, getParentGasFloorPerTokenCall,
+    getApyCall, getShareCountCall, getSharePriceCall,
+    getScheduledUpgradeCall, getScheduledUpgradeReturn, getTransactionFilteringFromCall,
+    isCalldataPriceIncreaseEnabledCall, isChainOwnerCall, isNativeTokenOwnerCall,
+    isTransactionFiltererCall, rectifyChainOwnerCall,
+};
 use self::ArbSys::{
     InvalidBlockNumber, L2ToL1Tx, SendMerkleUpdate, arbBlockHashCall, arbBlockNumberCall,
     arbChainIDCall, arbOSVersionCall, getStorageGasAvailableCall, isTopLevelCallCall,
@@ -62,11 +119,20 @@ use self::ArbSys::{
 
 /// Arbitrum precompile provider.
 ///
-/// This keeps Ethereum's built-in precompiles and layers in Arbitrum's
-/// `ArbSys` precompile at `0x64`.
+/// This keeps Ethereum's built-in precompiles and layers in Arbitrum's Nitro
+/// compatibility precompiles.
 #[derive(Debug, Clone, Default)]
 pub struct ArbPrecompiles {
     inner: EthPrecompiles,
+}
+
+/// ApeChain precompile provider.
+///
+/// This wraps the Arbitrum provider and adds ApeChain's custom selectors to
+/// the standard Nitro precompile addresses.
+#[derive(Debug, Clone, Default)]
+pub struct ApePrecompiles {
+    inner: ArbPrecompiles,
 }
 
 impl<ContextT> PrecompileProvider<ContextT> for ArbPrecompiles
@@ -84,20 +150,264 @@ where
         context: &mut ContextT,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
-        if inputs.bytecode_address != ARBSYS_ADDRESS {
-            return self.inner.run(context, inputs);
+        if inputs.bytecode_address == ARBSYS_ADDRESS {
+            return run_arbsys(context, inputs).map(Some);
         }
 
-        run_arbsys(context, inputs).map(Some)
+        if inputs.bytecode_address == ARBINFO_ADDRESS {
+            return run_arbinfo(context, inputs).map(Some);
+        }
+
+        if inputs.bytecode_address == ARBOWNERPUBLIC_ADDRESS {
+            return run_arb_owner_public(context, inputs).map(Some);
+        }
+
+        self.inner.run(context, inputs)
     }
 
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(self.inner.warm_addresses().chain(iter::once(ARBSYS_ADDRESS)))
+        Box::new(
+            self.inner.warm_addresses().chain([
+                ARBSYS_ADDRESS,
+                ARBINFO_ADDRESS,
+                ARBOWNERPUBLIC_ADDRESS,
+            ]),
+        )
     }
 
     fn contains(&self, address: &Address) -> bool {
-        *address == ARBSYS_ADDRESS || self.inner.contains(address)
+        *address == ARBSYS_ADDRESS
+            || *address == ARBINFO_ADDRESS
+            || *address == ARBOWNERPUBLIC_ADDRESS
+            || self.inner.contains(address)
     }
+}
+
+impl<ContextT> PrecompileProvider<ContextT> for ApePrecompiles
+where
+    ContextT: ContextTrait,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
+        <ArbPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec)
+    }
+
+    fn run(
+        &mut self,
+        context: &mut ContextT,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        if inputs.bytecode_address == ARBINFO_ADDRESS {
+            return run_ape_arbinfo(context, inputs).map(Some);
+        }
+
+        if inputs.bytecode_address == ARBOWNERPUBLIC_ADDRESS {
+            return run_ape_arb_owner_public(context, inputs).map(Some);
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+        <ArbPrecompiles as PrecompileProvider<ContextT>>::warm_addresses(&self.inner)
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        <ArbPrecompiles as PrecompileProvider<ContextT>>::contains(&self.inner, address)
+    }
+}
+
+fn run_ape_arbinfo<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(inputs, "ArbInfo: missing selector"));
+    }
+
+    let selector = &calldata[..4];
+
+    if selector == getBalanceValuesCall::SELECTOR {
+        let Ok(call) = getBalanceValuesCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        };
+
+        let balance = load_account_balance(context, call.account)?;
+        return Ok(success(inputs, (balance, U256::ZERO, U256::ZERO).abi_encode()));
+    }
+
+    if selector == getYieldConfigurationCall::SELECTOR {
+        if getYieldConfigurationCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    if selector == getDelegateCall::SELECTOR {
+        if getDelegateCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        }
+
+        return Ok(success(inputs, Address::ZERO.abi_encode()));
+    }
+
+    if selector == configureAutomaticYieldCall::SELECTOR {
+        if configureAutomaticYieldCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        }
+
+        if inputs.is_static {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbInfo: state-changing call in static context",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::new()));
+    }
+
+    if selector == configureVoidYieldCall::SELECTOR {
+        if configureVoidYieldCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        }
+
+        if inputs.is_static {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbInfo: state-changing call in static context",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::new()));
+    }
+
+    if selector == configureDelegateYieldCall::SELECTOR {
+        if configureDelegateYieldCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        }
+
+        if inputs.is_static {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbInfo: state-changing call in static context",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::new()));
+    }
+
+    run_arbinfo(context, inputs)
+}
+
+fn run_ape_arb_owner_public<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(
+            inputs,
+            "ArbOwnerPublic: missing selector",
+        ));
+    }
+
+    let selector = &calldata[..4];
+
+    if selector == getSharePriceCall::SELECTOR {
+        if getSharePriceCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, ape_share_price(context)?.abi_encode()));
+    }
+
+    if selector == getShareCountCall::SELECTOR {
+        if getShareCountCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        let share_count = read_ape_state_word(context, APE_SHARE_COUNT_SLOT)?;
+        return Ok(success(inputs, share_count.abi_encode()));
+    }
+
+    if selector == getApyCall::SELECTOR {
+        if getApyCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        let apy = read_ape_state_word(context, APE_APY_SLOT)?;
+        let apy: u64 = apy
+            .try_into()
+            .map_err(|_| "ArbOwnerPublic: invalid ApeChain APY".to_string())?;
+
+        return Ok(success(inputs, apy.abi_encode()));
+    }
+
+    run_arb_owner_public(context, inputs)
+}
+
+fn run_arbinfo<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(inputs, "ArbInfo: missing selector"));
+    }
+
+    let selector = &calldata[..4];
+
+    if selector == getBalanceCall::SELECTOR {
+        let Ok(call) = getBalanceCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        };
+
+        let balance = load_account_balance(context, call.account)?;
+
+        return Ok(success(inputs, balance.abi_encode()));
+    }
+
+    if selector == getCodeCall::SELECTOR {
+        let Ok(call) = getCodeCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "ArbInfo: invalid calldata"));
+        };
+
+        let code = load_account_code(context, call.account)?;
+
+        return Ok(success(inputs, code.abi_encode()));
+    }
+
+    Ok(revert_with_message(inputs, "ArbInfo: unknown selector"))
 }
 
 fn run_arbsys<ContextT>(
@@ -243,6 +553,253 @@ where
     }
 
     Ok(revert_with_message(inputs, "ArbSys: unknown selector"))
+}
+
+fn run_arb_owner_public<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(
+            inputs,
+            "ArbOwnerPublic: missing selector",
+        ));
+    }
+
+    let selector = &calldata[..4];
+
+    if selector == isChainOwnerCall::SELECTOR {
+        if isChainOwnerCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, false.abi_encode()));
+    }
+
+    if selector == rectifyChainOwnerCall::SELECTOR {
+        let Ok(call) = rectifyChainOwnerCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        };
+
+        if inputs.is_static {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: state-changing call in static context",
+            ));
+        }
+
+        // EDR doesn't model Nitro's owner/admin config yet; accept the call so
+        // forked apps probing this precompile don't revert.
+        context.journal_mut().log(Log {
+            address: ARBOWNERPUBLIC_ADDRESS,
+            data: ChainOwnerRectified {
+                rectifiedOwner: call.ownerToRectify,
+            }
+            .encode_log_data(),
+        });
+
+        return Ok(success(inputs, Vec::new()));
+    }
+
+    if selector == getAllChainOwnersCall::SELECTOR {
+        if getAllChainOwnersCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::<Address>::new().abi_encode()));
+    }
+
+    if selector == getNativeTokenManagementFromCall::SELECTOR {
+        if getNativeTokenManagementFromCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    if selector == isNativeTokenOwnerCall::SELECTOR {
+        if isNativeTokenOwnerCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, false.abi_encode()));
+    }
+
+    if selector == getAllNativeTokenOwnersCall::SELECTOR {
+        if getAllNativeTokenOwnersCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::<Address>::new().abi_encode()));
+    }
+
+    if selector == getTransactionFilteringFromCall::SELECTOR {
+        if getTransactionFilteringFromCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    if selector == isTransactionFiltererCall::SELECTOR {
+        if isTransactionFiltererCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, false.abi_encode()));
+    }
+
+    if selector == getAllTransactionFilterersCall::SELECTOR {
+        if getAllTransactionFilterersCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Vec::<Address>::new().abi_encode()));
+    }
+
+    if selector == getFilteredFundsRecipientCall::SELECTOR {
+        if getFilteredFundsRecipientCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Address::ZERO.abi_encode()));
+    }
+
+    if selector == getNetworkFeeAccountCall::SELECTOR {
+        if getNetworkFeeAccountCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Address::ZERO.abi_encode()));
+    }
+
+    if selector == getInfraFeeAccountCall::SELECTOR {
+        if getInfraFeeAccountCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, Address::ZERO.abi_encode()));
+    }
+
+    if selector == getBrotliCompressionLevelCall::SELECTOR {
+        if getBrotliCompressionLevelCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    if selector == getParentGasFloorPerTokenCall::SELECTOR {
+        if getParentGasFloorPerTokenCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    if selector == getScheduledUpgradeCall::SELECTOR {
+        if getScheduledUpgradeCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(
+            inputs,
+            getScheduledUpgradeCall::abi_encode_returns(&getScheduledUpgradeReturn {
+                arbosVersion: 0,
+                scheduledForTimestamp: 0,
+            }),
+        ));
+    }
+
+    if selector == isCalldataPriceIncreaseEnabledCall::SELECTOR {
+        if isCalldataPriceIncreaseEnabledCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, false.abi_encode()));
+    }
+
+    if selector == getCollectTipsCall::SELECTOR {
+        if getCollectTipsCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, false.abi_encode()));
+    }
+
+    if selector == getMaxStylusContractFragmentsCall::SELECTOR {
+        if getMaxStylusContractFragmentsCall::abi_decode(calldata).is_err() {
+            return Ok(revert_with_message(
+                inputs,
+                "ArbOwnerPublic: invalid calldata",
+            ));
+        }
+
+        return Ok(success(inputs, 0u64.abi_encode()));
+    }
+
+    Ok(revert_with_message(
+        inputs,
+        "ArbOwnerPublic: unknown selector",
+    ))
 }
 
 fn run_send_tx_to_l1<ContextT>(
@@ -429,6 +986,82 @@ fn partial_slot(level: usize) -> U256 {
     U256::from(PARTIALS_SLOT_START + level as u64)
 }
 
+fn load_account_balance<ContextT>(context: &mut ContextT, address: Address) -> Result<U256, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let account = context
+        .journal_mut()
+        .load_account(address)
+        .map_err(|error| error.to_string())?;
+
+    Ok(if account.info.exists() {
+        account.info.balance
+    } else {
+        U256::ZERO
+    })
+}
+
+fn ape_share_price<ContextT>(context: &mut ContextT) -> Result<u64, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let share_price = read_ape_state_word(context, APE_SHARE_PRICE_SLOT)?;
+    if share_price == U256::ZERO {
+        return Ok(APE_DEFAULT_SHARE_PRICE);
+    }
+
+    share_price
+        .try_into()
+        .map_err(|_| "ArbOwnerPublic: invalid ApeChain share price".to_string())
+}
+
+fn load_account_code<ContextT>(context: &mut ContextT, address: Address) -> Result<Bytes, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account_info = context
+        .journal_mut()
+        .load_account(address)
+        .map_err(|error| error.to_string())?
+        .info
+        .clone();
+
+    if !account_info.exists() {
+        return Ok(Bytes::new());
+    }
+
+    if let Some(code) = account_info.code.take() {
+        return Ok(code.original_bytes());
+    }
+
+    context
+        .journal_mut()
+        .db_mut()
+        .code_by_hash(account_info.code_hash)
+        .map(|bytecode| bytecode.original_bytes())
+        .map_err(|error| error.to_string())
+}
+
+fn read_ape_state_word<ContextT>(context: &mut ContextT, word_index: u64) -> Result<U256, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let code = load_account_code(context, APE_PRECOMPILE_STATE_ADDRESS)?;
+    let offset = word_index as usize * 32;
+    let end = offset + 32;
+
+    if code.len() < end {
+        return Ok(U256::ZERO);
+    }
+
+    Ok(U256::from_be_slice(&code[offset..end]))
+}
+
 fn read_hash<ContextT>(context: &mut ContextT, slot: U256) -> Result<B256, String>
 where
     ContextT: ContextTrait,
@@ -450,14 +1083,26 @@ where
     ContextT: ContextTrait,
     ContextT::Db: Database,
 {
+    read_word_at(context, ARBSYS_STATE_ADDRESS, slot)
+}
+
+fn read_word_at<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    slot: U256,
+) -> Result<U256, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
     context
         .journal_mut()
-        .load_account(ARBSYS_STATE_ADDRESS)
+        .load_account(address)
         .map_err(|error| error.to_string())?;
 
     context
         .journal_mut()
-        .sload(ARBSYS_STATE_ADDRESS, slot)
+        .sload(address, slot)
         .map(|value| value.data)
         .map_err(|error| error.to_string())
 }
@@ -467,9 +1112,22 @@ where
     ContextT: ContextTrait,
     ContextT::Db: Database,
 {
+    write_word_at(context, ARBSYS_STATE_ADDRESS, slot, value)
+}
+
+fn write_word_at<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    slot: U256,
+    value: U256,
+) -> Result<(), String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
     let mut account = context
         .journal_mut()
-        .load_account_mut(ARBSYS_STATE_ADDRESS)
+        .load_account_mut(address)
         .map_err(|error| error.to_string())?;
     account.data.touch();
     if account.data.nonce() == 0 {
@@ -478,7 +1136,7 @@ where
 
     context
         .journal_mut()
-        .sstore(ARBSYS_STATE_ADDRESS, slot, value)
+        .sstore(address, slot, value)
         .map(|_| ())
         .map_err(|error| error.to_string())
 }

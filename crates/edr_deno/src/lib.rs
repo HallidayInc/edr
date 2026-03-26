@@ -5,13 +5,18 @@ use ansi_term::Color;
 use core::str::FromStr;
 use deno_bindgen::deno_bindgen;
 use edr_block_api::Block as _;
+use edr_rpc_client::{
+    cache::{CacheableMethod, key::{ReadCacheKey, WriteCacheKey}},
+    header::{self, HeaderValue},
+    HeaderMap, RpcClient, RpcMethod,
+};
 use edr_chain_config::{ChainOverride, ForkCondition, HardforkActivation, HardforkActivations};
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
 use edr_chain_spec_provider::ProviderChainSpec;
-use edr_generic::{ArbChainSpec, GenericChainSpec};
+use edr_generic::{ApeChainSpec, ArbChainSpec, GenericChainSpec, APE_PRECOMPILE_STATE_ADDRESS};
 use edr_op::{self, OpChainSpec};
-use edr_primitives::{Bytes, HashMap, U256};
+use edr_primitives::{Address, Bytecode, Bytes, HashMap, U64, U256};
 use edr_provider::{
     test_utils, time::CurrentTime, AccountOverride, InvalidRequestReason, Provider,
 };
@@ -20,7 +25,7 @@ use edr_signer::{public_key_to_address, SecretKey, SignatureError};
 use edr_solidity::{artifacts::BuildInfoConfig, contract_decoder::ContractDecoder};
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
 use serde_json::Value as JsonValue;
 use std::{
     collections::HashSet,
@@ -30,6 +35,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::runtime::Runtime;
+
+const APE_ARBOWNERPUBLIC_ADDRESS: &str = "0x000000000000000000000000000000000000006b";
+const APE_GET_SHARE_PRICE_SELECTOR: &str = "0x5b1dac60";
+const APE_GET_SHARE_COUNT_SELECTOR: &str = "0x1c0b915b";
+const APE_GET_APY_SELECTOR: &str = "0x1fb922e0";
 
 fn parse_u64<E: serde::de::Error>(val: JsonValue) -> Result<u64, E> {
     match val {
@@ -87,6 +97,163 @@ fn secret_key_from_hex(s: &str) -> Result<SecretKey, SignatureError> {
     SecretKey::from_slice(&arr).map_err(SignatureError::EllipticCurveError)
 }
 
+#[derive(Default)]
+struct ApePrecompileState {
+    share_price: Option<U256>,
+    share_count: Option<U256>,
+    apy: Option<U256>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "method", content = "params")]
+enum ApeRequestMethod {
+    #[serde(rename = "eth_call")]
+    Call(ApeCallRequest, ApeBlockParam),
+    #[serde(rename = "eth_blockNumber", with = "empty_params")]
+    BlockNumber(()),
+    #[serde(rename = "eth_chainId", with = "empty_params")]
+    ChainId(()),
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ApeCallRequest {
+    to: Address,
+    data: Bytes,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum ApeBlockParam {
+    Tag(&'static str),
+    Number(U64),
+}
+
+#[derive(Clone, Debug)]
+struct ApeUncacheableMethod;
+
+impl CacheableMethod for ApeUncacheableMethod {
+    type MethodWithResolvableBlockTag = ApeUncacheableMethod;
+
+    fn resolve_block_tag(method: Self::MethodWithResolvableBlockTag, _block_number: u64) -> Self {
+        method
+    }
+
+    fn read_cache_key(self) -> Option<ReadCacheKey> {
+        None
+    }
+
+    fn write_cache_key(self) -> Option<WriteCacheKey<Self>> {
+        None
+    }
+}
+
+impl TryFrom<&ApeRequestMethod> for ApeUncacheableMethod {
+    type Error = ();
+
+    fn try_from(_value: &ApeRequestMethod) -> Result<Self, Self::Error> {
+        Err(())
+    }
+}
+
+impl RpcMethod for ApeRequestMethod {
+    type Cacheable<'method> = ApeUncacheableMethod;
+
+    fn block_number_request() -> Self {
+        Self::BlockNumber(())
+    }
+
+    fn chain_id_request() -> Self {
+        Self::ChainId(())
+    }
+}
+
+fn rpc_headers(headers: Option<&[HttpHeader]>) -> Option<HeaderMap> {
+    let mut rpc_headers = HeaderMap::new();
+    for header in headers.unwrap_or_default() {
+        let name = header::HeaderName::from_bytes(header.name.as_bytes()).ok()?;
+        let value = HeaderValue::from_str(&header.value).ok()?;
+        rpc_headers.insert(name, value);
+    }
+    Some(rpc_headers)
+}
+
+fn fetch_ape_precompile_word(
+    client: &RpcClient<ApeRequestMethod>,
+    selector: &str,
+    block_param: ApeBlockParam,
+) -> Option<U256> {
+    let call = ApeRequestMethod::Call(
+        ApeCallRequest {
+            to: Address::from_str(APE_ARBOWNERPUBLIC_ADDRESS).ok()?,
+            data: Bytes::from_str(selector).ok()?,
+        },
+        block_param,
+    );
+
+    runtime().block_on(client.call::<String>(call)).ok().and_then(|result| U256::from_str(&result).ok())
+}
+
+fn fetch_ape_precompile_state(fork: Option<&ForkConfig>) -> ApePrecompileState {
+    let Some(fork) = fork else {
+        return ApePrecompileState::default();
+    };
+
+    let block_param = fork
+        .block_number
+        .map(|block_number| ApeBlockParam::Number(U64::from(block_number)))
+        .unwrap_or(ApeBlockParam::Tag("latest"));
+
+    let Ok(client) = RpcClient::<ApeRequestMethod>::new(
+        &fork.json_rpc_url,
+        PathBuf::new(),
+        rpc_headers(fork.http_headers.as_deref()),
+    ) else {
+        return ApePrecompileState::default();
+    };
+
+    ApePrecompileState {
+        share_price: fetch_ape_precompile_word(&client, APE_GET_SHARE_PRICE_SELECTOR, block_param.clone()),
+        share_count: fetch_ape_precompile_word(&client, APE_GET_SHARE_COUNT_SELECTOR, block_param.clone()),
+        apy: fetch_ape_precompile_word(&client, APE_GET_APY_SELECTOR, block_param),
+    }
+}
+
+fn encode_ape_precompile_code(state: ApePrecompileState) -> Option<Bytecode> {
+    if state.share_price.is_none() && state.share_count.is_none() && state.apy.is_none() {
+        return None;
+    }
+
+    let mut metadata = Vec::with_capacity(96);
+    for word in [
+        state.share_price.unwrap_or(U256::ZERO),
+        state.share_count.unwrap_or(U256::ZERO),
+        state.apy.unwrap_or(U256::ZERO),
+    ] {
+        metadata.extend_from_slice(&word.to_be_bytes::<32>());
+    }
+
+    Some(Bytecode::new_raw(Bytes::from(metadata)))
+}
+
+fn seed_ape_precompile_state(
+    genesis_state: &mut HashMap<edr_primitives::Address, AccountOverride>,
+    fork: Option<&ForkConfig>,
+) {
+    let Some(code) = encode_ape_precompile_code(fetch_ape_precompile_state(fork)) else {
+        return;
+    };
+
+    genesis_state.insert(
+        APE_PRECOMPILE_STATE_ADDRESS,
+        AccountOverride {
+            balance: Some(U256::ZERO),
+            nonce: Some(1),
+            code: Some(code),
+            storage: None,
+        },
+    );
+}
+
 fn parse_l1_spec_id(name: &str) -> Option<l1::Hardfork> {
     match name.to_ascii_lowercase().as_str() {
         "frontier" => Some(l1::Hardfork::FRONTIER),
@@ -109,6 +276,22 @@ fn parse_l1_spec_id(name: &str) -> Option<l1::Hardfork> {
         "cancun" => Some(l1::Hardfork::CANCUN),
         "prague" => Some(l1::Hardfork::PRAGUE),
         _ => None,
+    }
+}
+
+mod empty_params {
+    use super::{Serialize, SerializeSeq, Serializer};
+
+    pub fn serialize<SerializerT, T>(
+        _value: &T,
+        serializer: SerializerT,
+    ) -> Result<SerializerT::Ok, SerializerT::Error>
+    where
+        SerializerT: Serializer,
+        T: Serialize,
+    {
+        let seq = serializer.serialize_seq(Some(0))?;
+        seq.end()
     }
 }
 
@@ -136,6 +319,7 @@ enum Chain {
     Op,
     Generic,
     Arb,
+    Ape,
 }
 
 impl Default for Chain {
@@ -465,6 +649,7 @@ enum ProviderEntry {
     Op(Arc<Provider<OpChainSpec>>),
     Generic(Arc<Provider<GenericChainSpec>>),
     Arb(Arc<Provider<ArbChainSpec>>),
+    Ape(Arc<Provider<ApeChainSpec>>),
 }
 
 impl Clone for ProviderEntry {
@@ -474,6 +659,7 @@ impl Clone for ProviderEntry {
             Self::Op(p) => Self::Op(Arc::clone(p)),
             Self::Generic(p) => Self::Generic(Arc::clone(p)),
             Self::Arb(p) => Self::Arb(Arc::clone(p)),
+            Self::Ape(p) => Self::Ape(Arc::clone(p)),
         }
     }
 }
@@ -1043,6 +1229,143 @@ pub fn provider_new(
                 Err(_) => return 0,
             }
         }
+        Chain::Ape => {
+            let fork = fork_opts.as_ref().map(|f| {
+                let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
+                    HashMap::default();
+                if let Some(chains) = &opts.chains {
+                    for c in chains {
+                        let mut activations = Vec::new();
+                        for hf in &c.hardforks {
+                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
+                                activations.push(HardforkActivation {
+                                    condition: ForkCondition::Block(hf.block_number),
+                                    hardfork: spec,
+                                });
+                            }
+                        }
+                        if !activations.is_empty() {
+                            chain_overrides.insert(
+                                c.chain_id,
+                                ChainOverride {
+                                    name: String::new(),
+                                    hardfork_activation_overrides: Some(
+                                        HardforkActivations::new(activations),
+                                    ),
+                                },
+                            );
+                        }
+                    }
+                }
+                edr_provider::ForkConfig {
+                    block_number: f.block_number,
+                    cache_dir: opts
+                        .cache_dir
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    chain_overrides,
+                    http_headers: f.http_headers.as_ref().map(|h| {
+                        h.iter()
+                            .map(|h| (h.name.clone(), h.value.clone()))
+                            .collect::<std::collections::HashMap<_, _>>()
+                    }),
+                    url: f.json_rpc_url.clone(),
+                }
+            });
+            let mut cfg = if fork.is_some() {
+                test_utils::create_test_config_with_fork::<l1::Hardfork>(fork)
+            } else {
+                test_utils::create_test_config::<l1::Hardfork>()
+            };
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
+            if let Some(ref name) = opts.hardfork {
+                if let Some(spec) = parse_l1_spec_id(name) {
+                    cfg.hardfork = spec;
+                }
+            }
+            if let Some(chains) = &opts.chains {
+                if chains.is_empty() {
+                    if let Some(acts) = default_l1_activations() {
+                        let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
+                            block_number: None,
+                            cache_dir: PathBuf::new(),
+                            chain_overrides: HashMap::default(),
+                            http_headers: None,
+                            url: String::new(),
+                        });
+                        fork_cfg.chain_overrides.insert(
+                            cfg.chain_id,
+                            ChainOverride {
+                                name: String::new(),
+                                hardfork_activation_overrides: Some(acts.clone()),
+                            },
+                        );
+                    }
+                }
+            } else if let Some(acts) = default_l1_activations() {
+                let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
+                    block_number: None,
+                    cache_dir: PathBuf::new(),
+                    chain_overrides: HashMap::default(),
+                    http_headers: None,
+                    url: String::new(),
+                });
+                fork_cfg.chain_overrides.insert(
+                    cfg.chain_id,
+                    ChainOverride {
+                        name: String::new(),
+                        hardfork_activation_overrides: Some(acts.clone()),
+                    },
+                );
+            }
+            if !owned_accounts.is_empty() {
+                cfg.owned_accounts = owned_accounts.clone();
+            }
+            if !genesis_state.is_empty() {
+                cfg.genesis_state.extend(genesis_state.clone());
+            }
+            seed_ape_precompile_state(&mut cfg.genesis_state, fork_opts.as_ref());
+            match Provider::<ApeChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(FfiLogger::new(id, log_cb, decode_cb, log_enabled != 0)),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(p) => ProviderEntry::Ape(Arc::new(p)),
+                Err(_) => return 0,
+            }
+        }
     };
 
     PROVIDERS.lock().unwrap().insert(id, entry);
@@ -1192,6 +1515,37 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
+        ProviderEntry::Ape(provider) => {
+            let req: edr_provider::requests::ProviderRequest<ApeChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(error) => {
+                        let msg = error.to_string();
+                        let value = serde_json::Value::from_str(request).ok();
+                        let method = value
+                            .as_ref()
+                            .and_then(|v| v.get("method"))
+                            .and_then(serde_json::Value::as_str);
+                        let reason = InvalidRequestReason::new(method, &msg);
+                        if let Some((name, provider_error)) =
+                            reason.provider_error::<ApeChainSpec, CurrentTime>()
+                        {
+                            let _ = provider.log_failed_deserialization(name, &provider_error);
+                        }
+                        let err = jsonrpc::ResponseData::<()>::Error {
+                            error: jsonrpc::Error {
+                                code: reason.error_code(),
+                                message: reason.error_message(),
+                                data: value,
+                            },
+                        };
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
+            let result = provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
+            serde_json::to_string(&response).unwrap()
+        }
     }
 }
 
@@ -1204,6 +1558,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
             ProviderEntry::Op(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Arb(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Ape(p) => p.set_verbose_tracing(enabled != 0),
         }
     }
 }
