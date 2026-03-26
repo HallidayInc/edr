@@ -34,6 +34,7 @@ use edr_state_api::StateDiff;
 
 use crate::{
     eip2718::TypedEnvelope,
+    precompiles::ArbPrecompiles,
     receipt::GenericExecutionReceiptBuilder,
     rpc::{
         block::GenericRpcBlock, receipt::GenericRpcTransactionReceipt,
@@ -381,8 +382,13 @@ impl ContextChainSpec for ArbChainSpec {
 }
 
 impl EvmChainSpec for ArbChainSpec {
-    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> =
-        <L1ChainSpec as EvmChainSpec>::PrecompileProvider<BlockT, DatabaseT>;
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> = ArbPrecompiles;
+
+    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database>(
+        hardfork: Self::Hardfork,
+    ) -> Self::PrecompileProvider<BlockT, DatabaseT> {
+        ArbPrecompiles::new(hardfork)
+    }
 
     fn dry_run<
         BlockT: BlockEnvTrait,
