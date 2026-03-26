@@ -5,9 +5,11 @@ edition.workspace = true
 description = "A generic chain specification for Ethereum Layer 1 chains."
 
 [dependencies]
+alloy-primitives.workspace = true
 alloy-eips.workspace = true
 alloy-rlp.workspace = true
 alloy-serde = { workspace = true, features = ["std"] }
+alloy-sol-types.workspace = true
 derive-where.workspace = true
 edr_block_api.workspace = true
 edr_block_header.workspace = true
@@ -39,6 +41,9 @@ edr_utils = { path = "../edr_utils" }
 log = { version = "0.4.17", default-features = false }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+revm-context-interface.workspace = true
+revm-handler.workspace = true
+revm-interpreter.workspace = true
 
 [dev-dependencies]
 anyhow = "1.0.89"

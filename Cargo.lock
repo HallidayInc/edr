@@ -2952,8 +2952,10 @@ name = "edr_generic"
 version = "0.3.8"
 dependencies = [
  "alloy-eips",
+ "alloy-primitives",
  "alloy-rlp",
  "alloy-serde",
+ "alloy-sol-types",
  "anyhow",
  "derive-where",
  "edr_block_api",
@@ -2991,6 +2993,9 @@ dependencies = [
  "log",
  "parking_lot 0.12.3",
  "paste",
+ "revm-context-interface",
+ "revm-handler",
+ "revm-interpreter",
  "serde",
  "serde_json",
  "serial_test",
