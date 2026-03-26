@@ -23,6 +23,19 @@ async function fetchRecentBlockNumber(url: string): Promise<bigint> {
     return BigInt(json.result);
 }
 
+async function rpcRequest(url: string, req: { method: string, params: any[] }) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: 1, jsonrpc: "2.0", ...req }),
+    });
+    const json = await response.json();
+    if (json.result !== undefined) {
+        return json.result;
+    }
+    throw new Error(JSON.stringify(json.error));
+}
+
 async function request(provider: Provider, req: { method: string, params: any[] }) {
     const res = await provider.handleRequest(JSON.stringify({ id: 1, jsonrpc: "2.0", ...req }));
     const parsed = JSON.parse(res.data);
@@ -50,6 +63,10 @@ function bytesToHex(value: Uint8Array) {
     return `0x${hex.length === 0 ? "0" : hex}`;
 }
 
+function toRpcQuantity(value: bigint) {
+    return `0x${value.toString(16)}`;
+}
+
 function selector(signature: string) {
     return bytesToHex(keccak_256(new TextEncoder().encode(signature)).slice(0, 4));
 }
@@ -60,6 +77,20 @@ function encodeAddressArg(address: string) {
 
 function decodeFirstWord(result: string) {
     return BigInt(`0x${result.replace(/^0x/, "").slice(0, 64) || "0"}`);
+}
+
+function decodeWord(result: string, index: number) {
+    const normalized = result.replace(/^0x/, "");
+    const start = index * 64;
+    return BigInt(`0x${normalized.slice(start, start + 64) || "0"}`);
+}
+
+function decodeBytes(result: string) {
+    const normalized = result.replace(/^0x/, "");
+    const offset = Number(decodeWord(result, 0)) * 2;
+    const length = Number(BigInt(`0x${normalized.slice(offset, offset + 64) || "0"}`));
+    const start = offset + 64;
+    return `0x${normalized.slice(start, start + length * 2)}`;
 }
 
 function bigintToBytes(value: bigint) {
@@ -562,6 +593,269 @@ Deno.test("local arbitrum ArbSys withdrawEth succeeds", async () => {
         }, "latest"],
     });
     assertEquals(decodeFirstWord(sendState), 1n);
+});
+
+Deno.test("arbitrum fork ArbInfo precompile mirrors standard account queries", async () => {
+    const rpcUrl = "https://arb1.arbitrum.io/rpc";
+    const arbInfo = "0x0000000000000000000000000000000000000065";
+    const account = "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8";
+
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        bailOnCallFailure: true,
+        chainId: 42161n,
+        fork: {
+            jsonRpcUrl: rpcUrl,
+            blockNumber: await fetchRecentBlockNumber(rpcUrl),
+        },
+        hardfork: "cancun",
+        chains: [{
+            chainId: 42161n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+    });
+
+    const expectedBalance = BigInt(await request(arb, {
+        method: "eth_getBalance",
+        params: [account, "latest"],
+    }));
+    const actualBalance = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbInfo,
+            data: `${selector("getBalance(address)")}${encodeAddressArg(account)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(actualBalance), expectedBalance);
+
+    const expectedCode = await request(arb, {
+        method: "eth_getCode",
+        params: [account, "latest"],
+    });
+    const actualCode = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbInfo,
+            data: `${selector("getCode(address)")}${encodeAddressArg(account)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeBytes(actualCode).toLowerCase(), expectedCode.toLowerCase());
+});
+
+Deno.test("local arbitrum ArbOwnerPublic compatibility calls succeed", async () => {
+    const sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    const arbOwnerPublic = "0x000000000000000000000000000000000000006b";
+
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        bailOnCallFailure: true,
+        bailOnTransactionFailure: true,
+        chainId: 42161n,
+        networkId: 42161n,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 42161n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+        ownedAccounts: [{
+            secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            balance: 1000n * 10n ** 18n,
+        }],
+    });
+
+    const isChainOwner = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: `${selector("isChainOwner(address)")}${encodeAddressArg(sender)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(isChainOwner), 0n);
+
+    const allChainOwners = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getAllChainOwners()"),
+        }, "latest"],
+    });
+    assertEquals(decodeWord(allChainOwners, 1), 0n);
+
+    const networkFeeAccount = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getNetworkFeeAccount()"),
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(networkFeeAccount), 0n);
+
+    const txHash = await request(arb, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: sender,
+            to: arbOwnerPublic,
+            gas: "0x186a0",
+            data: `${selector("rectifyChainOwner(address)")}${encodeAddressArg(sender)}`,
+        }],
+    });
+    const receipt = await request(arb, {
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+    });
+    assertEquals(receipt.status, "0x1");
+    assertEquals(receipt.logs.length, 1);
+    assertEquals(receipt.logs[0].address.toLowerCase(), arbOwnerPublic);
+});
+
+Deno.test("local ape precompile compatibility calls succeed", async () => {
+    const sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    const arbInfo = "0x0000000000000000000000000000000000000065";
+    const arbOwnerPublic = "0x000000000000000000000000000000000000006b";
+    const initialBalance = 1000n * 10n ** 18n;
+
+    using ctx = new Context();
+    using ape = ctx.createProvider({
+        chain: "ape",
+        bailOnCallFailure: true,
+        bailOnTransactionFailure: true,
+        chainId: 33139n,
+        networkId: 33139n,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 33139n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+        ownedAccounts: [{
+            secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            balance: initialBalance,
+        }],
+    });
+
+    const sharePrice = await request(ape, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getSharePrice()"),
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(sharePrice), 1n);
+
+    const shareCount = await request(ape, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getShareCount()"),
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(shareCount), 0n);
+
+    const balanceValues = await request(ape, {
+        method: "eth_call",
+        params: [{
+            to: arbInfo,
+            data: `${selector("getBalanceValues(address)")}${encodeAddressArg(sender)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeWord(balanceValues, 0), initialBalance);
+    assertEquals(decodeWord(balanceValues, 1), 0n);
+    assertEquals(decodeWord(balanceValues, 2), 0n);
+
+    const txHash = await request(ape, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: sender,
+            to: arbInfo,
+            gas: "0x186a0",
+            data: selector("configureAutomaticYield()"),
+        }],
+    });
+    const receipt = await request(ape, {
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+    });
+    assertEquals(receipt.status, "0x1");
+});
+
+Deno.test("ape fork WAPE calls match remote ApeChain", async () => {
+    const rpcUrl = "https://rpc.apechain.com";
+    const wape = "0x48b62137edfa95a428d35c09e44256a739f6b557";
+    const arbOwnerPublic = "0x000000000000000000000000000000000000006b";
+    const sender = "0x0000000000000000000000000000000000000001";
+    const blockNumber = await fetchRecentBlockNumber(rpcUrl);
+    const blockTag = toRpcQuantity(blockNumber);
+    const balanceOfData = `${selector("balanceOf(address)")}${encodeAddressArg(sender)}`;
+    const withdrawZeroData = `${selector("withdraw(uint256)")}${"0".padStart(64, "0")}`;
+
+    const remoteSharePrice = await rpcRequest(rpcUrl, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getSharePrice()"),
+        }, blockTag],
+    });
+    const remoteBalance = await rpcRequest(rpcUrl, {
+        method: "eth_call",
+        params: [{
+            to: wape,
+            data: balanceOfData,
+        }, blockTag],
+    });
+    const remoteWithdraw = await rpcRequest(rpcUrl, {
+        method: "eth_call",
+        params: [{
+            from: sender,
+            to: wape,
+            data: withdrawZeroData,
+        }, blockTag],
+    });
+
+    using ctx = new Context();
+    using ape = ctx.createProvider({
+        chain: "ape",
+        fork: {
+            jsonRpcUrl: rpcUrl,
+            blockNumber,
+        },
+        bailOnCallFailure: true,
+        chainId: 33139n,
+        networkId: 33139n,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 33139n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+    });
+
+    const localSharePrice = await request(ape, {
+        method: "eth_call",
+        params: [{
+            to: arbOwnerPublic,
+            data: selector("getSharePrice()"),
+        }, "latest"],
+    });
+    assertEquals(localSharePrice, remoteSharePrice);
+
+    const localBalance = await request(ape, {
+        method: "eth_call",
+        params: [{
+            to: wape,
+            data: balanceOfData,
+        }, "latest"],
+    });
+    assertEquals(localBalance, remoteBalance);
+
+    const localWithdraw = await request(ape, {
+        method: "eth_call",
+        params: [{
+            from: sender,
+            to: wape,
+            data: withdrawZeroData,
+        }, "latest"],
+    });
+    assertEquals(localWithdraw, remoteWithdraw);
 });
 
 Deno.test("transaction logging details", async () => {
