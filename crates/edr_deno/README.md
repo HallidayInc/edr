@@ -29,7 +29,9 @@ The library exposes a simple context object and provider constructor. The
 constructor accepts a JSON string with the following optional fields:
 
 - `chain`: `"l1"` (default), `"op"` for OP Stack chains like Base, or
-- `"generic"` for custom L1 forks such as Arbitrum
+- `"generic"` for custom L1 forks,
+- `"arb"` for Arbitrum-compatible chains, or
+- `"ape"` for ApeChain's Arbitrum-based precompile extensions
 - `fork`: `{ jsonRpcUrl, blockNumber?, httpHeaders? }` configuration for forking a remote chain
 - `chainId`: override the provider's chain ID
 - `hardfork`: starting hardfork for the chain
@@ -85,7 +87,7 @@ using local = ctx.createProvider({
 
 // fork Arbitrum and query a contract
 using arb = ctx.createProvider({
-  chain: "generic",
+  chain: "arb",
   fork: { jsonRpcUrl: "https://arb1.arbitrum.io/rpc" },
   chainId: 42161,
   hardfork: "cancun",

@@ -5,7 +5,10 @@ VERSION := $(shell grep '^version' crates/edr_deno/Cargo.toml | head -n1 | cut -
 
 deno-package:
 	cargo build --release -p edr_deno
-	@ext=so; \
-	[ -f target/release/libedr_deno.dylib ] && ext=dylib; \
-	cp target/release/libedr_deno.$$ext crates/edr_deno/edr/edr_deno.$(TARGET).$$ext
+	@case "$(TARGET)" in \
+		*-apple-darwin) ext=dylib; src=target/release/libedr_deno.$$ext ;; \
+		*-windows-*) ext=dll; src=target/release/edr_deno.$$ext ;; \
+		*) ext=so; src=target/release/libedr_deno.$$ext ;; \
+	esac; \
+	cp $$src crates/edr_deno/edr/edr_deno.$(TARGET).$$ext
 	tar czf nomicfoundation-edr-deno-$(VERSION).tgz crates/edr_deno/edr/*
