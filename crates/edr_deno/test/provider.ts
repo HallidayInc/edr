@@ -50,6 +50,18 @@ function bytesToHex(value: Uint8Array) {
     return `0x${hex.length === 0 ? "0" : hex}`;
 }
 
+function selector(signature: string) {
+    return bytesToHex(keccak_256(new TextEncoder().encode(signature)).slice(0, 4));
+}
+
+function encodeAddressArg(address: string) {
+    return address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+}
+
+function decodeFirstWord(result: string) {
+    return BigInt(`0x${result.replace(/^0x/, "").slice(0, 64) || "0"}`);
+}
+
 function bigintToBytes(value: bigint) {
     if (value === 0n) return new Uint8Array([]);
     let hex = value.toString(16);
@@ -493,6 +505,63 @@ Deno.test("realish setup", async () => {
     };
     const bal = await request(arb, call);
     assert(BigInt(bal) > 0n);
+});
+
+Deno.test("local arbitrum ArbSys withdrawEth succeeds", async () => {
+    const sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    const arbSys = "0x0000000000000000000000000000000000000064";
+    const destination = "0x1234567890123456789012345678901234567890";
+
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        chainId: 42161n,
+        networkId: 42161n,
+        hardfork: "cancun",
+        chains: [{
+            chainId: 42161n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+        ownedAccounts: [{
+            secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            balance: 1000n * 10n ** 18n,
+        }],
+    });
+
+    const withdrawData = `${selector("withdrawEth(address)")}${encodeAddressArg(destination)}`;
+    const txHash = await request(arb, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: sender,
+            to: arbSys,
+            gas: "0x186a0",
+            value: "0x2386f26fc10000",
+            data: withdrawData,
+        }],
+    });
+
+    const receipt = await request(arb, {
+        method: "eth_getTransactionReceipt",
+        params: [txHash],
+    });
+    assertEquals(receipt.status, "0x1");
+    assert(receipt.logs.length >= 1);
+    assertEquals(receipt.logs[0].address.toLowerCase(), arbSys);
+
+    const arbSysBalance = await request(arb, {
+        method: "eth_getBalance",
+        params: [arbSys, "latest"],
+    });
+    assertEquals(BigInt(arbSysBalance), 0n);
+
+    const sendState = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: arbSys,
+            data: selector("sendMerkleTreeState()"),
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(sendState), 1n);
 });
 
 Deno.test("transaction logging details", async () => {
