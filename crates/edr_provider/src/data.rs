@@ -2855,7 +2855,7 @@ where
             // Return the initial estimation if it was successful
             if success {
                 return Ok(EstimateGasResult {
-                    estimation: initial_estimation,
+                    estimation: gas::with_safety_margin(initial_estimation, header.gas_limit),
                     call_trace_arenas,
                 });
             }
@@ -2883,7 +2883,7 @@ where
 
             Ok(EstimateGasResult {
                 call_trace_arenas,
-                estimation,
+                estimation: gas::with_safety_margin(estimation, header.gas_limit),
             })
         })?
     }

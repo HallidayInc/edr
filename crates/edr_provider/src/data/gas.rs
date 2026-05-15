@@ -171,6 +171,12 @@ pub(super) fn binary_search_estimation<
     })
 }
 
+#[inline]
+pub(super) fn with_safety_margin(tight: u64, max: u64) -> u64 {
+    const SAFETY_MARGIN_PERCENT: u64 = 10;
+    tight.saturating_add(tight / 100 * SAFETY_MARGIN_PERCENT).min(max)
+}
+
 // Matches Hardhat
 #[inline]
 fn min_difference(lower_bound: u64) -> u64 {
