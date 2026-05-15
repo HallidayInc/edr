@@ -2727,12 +2727,9 @@ where
 
 impl<ChainSpecT, TimerT> ProviderData<ChainSpecT, TimerT>
 where
-    ChainSpecT: SyncProviderSpec<
-        TimerT,
-        SignedTransaction: Default
-                               + TransactionMut
-                               + TransactionValidation<ValidationError: PartialEq>,
-    >,
+    ChainSpecT: SyncProviderSpec<TimerT> + edr_utils::GasEstimateAdjuster,
+    ChainSpecT::SignedTransaction:
+        Default + TransactionMut + TransactionValidation<ValidationError: PartialEq>,
     TimerT: Clone + TimeSinceEpoch,
 {
     /// Estimate the gas cost of a transaction. Matches Hardhat behavior.
@@ -2855,7 +2852,10 @@ where
             // Return the initial estimation if it was successful
             if success {
                 return Ok(EstimateGasResult {
-                    estimation: initial_estimation,
+                    estimation: gas::adjust_estimation::<ChainSpecT>(
+                        initial_estimation,
+                        header.gas_limit,
+                    ),
                     call_trace_arenas,
                 });
             }
@@ -2883,7 +2883,7 @@ where
 
             Ok(EstimateGasResult {
                 call_trace_arenas,
-                estimation,
+                estimation: gas::adjust_estimation::<ChainSpecT>(estimation, header.gas_limit),
             })
         })?
     }

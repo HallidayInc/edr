@@ -171,6 +171,14 @@ pub(super) fn binary_search_estimation<
     })
 }
 
+#[inline]
+pub(super) fn adjust_estimation<ChainSpecT: edr_utils::GasEstimateAdjuster>(
+    tight: u64,
+    max: u64,
+) -> u64 {
+    <ChainSpecT as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(tight).min(max)
+}
+
 // Matches Hardhat
 #[inline]
 fn min_difference(lower_bound: u64) -> u64 {
@@ -186,6 +194,29 @@ fn min_difference(lower_bound: u64) -> u64 {
         300
     } else {
         200
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adjust_estimation;
+
+    struct DoubleEstimate;
+
+    impl edr_utils::GasEstimateAdjuster for DoubleEstimate {
+        fn adjust_estimate_gas(estimate: u64) -> u64 {
+            estimate.saturating_mul(2)
+        }
+    }
+
+    #[test]
+    fn adjusted_estimation_caps_at_max() {
+        assert_eq!(adjust_estimation::<DoubleEstimate>(60, 100), 100);
+    }
+
+    #[test]
+    fn adjusted_estimation_returns_adjusted_value_below_max() {
+        assert_eq!(adjust_estimation::<DoubleEstimate>(40, 100), 80);
     }
 }
 

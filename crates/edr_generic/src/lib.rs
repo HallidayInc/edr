@@ -51,16 +51,15 @@ impl GenericChainSpecFamily for ApeChainSpec {}
 
 impl edr_utils::GasEstimateAdjuster for GenericChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
-        estimate
+        const MIN_BUFFER: u64 = 25_000;
+        let buffer = estimate.max(MIN_BUFFER);
+        estimate.saturating_add(buffer)
     }
 }
 
 impl edr_utils::GasEstimateAdjuster for ArbChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
-        const MIN_BUFFER: u64 = 25_000;
-        let fractional_buffer = estimate / 2; // 50%
-        let buffer = fractional_buffer.max(MIN_BUFFER);
-        estimate.saturating_add(buffer)
+        <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
     }
 }
 
@@ -87,9 +86,15 @@ mod tests {
     }
 
     #[test]
-    fn generic_estimates_are_unmodified() {
+    fn generic_applies_minimum_buffer_for_small_estimates() {
         let estimate = 40_000;
-        assert_eq!(adjust_generic(estimate), estimate);
+        assert_eq!(adjust_generic(estimate), estimate + 25_000);
+    }
+
+    #[test]
+    fn generic_scales_buffer_with_estimate() {
+        let estimate = 500_000;
+        assert_eq!(adjust_generic(estimate), estimate + 500_000);
     }
 
     #[test]
@@ -101,7 +106,7 @@ mod tests {
     #[test]
     fn arb_scales_buffer_with_estimate() {
         let estimate = 500_000;
-        assert_eq!(adjust_arb(estimate), estimate + 100_000);
+        assert_eq!(adjust_arb(estimate), estimate + 500_000);
     }
 
     #[test]
