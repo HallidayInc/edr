@@ -4,6 +4,7 @@ use std::sync::Arc;
 use edr_block_api::{Block as _, FetchBlockReceipts};
 use edr_block_header::BlockHeader;
 use edr_blockchain_api::{r#dyn::DynBlockchainError, BlockHashByNumber};
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::{
     BlockEnvChainSpec, BlockEnvConstructor as _, ChainSpec, ExecutableTransaction as _,
     HaltReasonTrait, HardforkChainSpec,
@@ -49,6 +50,7 @@ pub(super) struct GasCallContext<'a, ChainSpecT: ChainSpec + HardforkChainSpec> 
     pub cfg_env: CfgEnv<ChainSpecT::Hardfork>,
     pub custom_precompiles: &'a HashMap<Address, PrecompileFn>,
     pub header: &'a BlockHeader,
+    pub native_token_mirror: Option<&'a NativeTokenMirror>,
     pub scheduled_blob_params: Option<&'a ScheduledBlobParams>,
     pub state: &'a dyn DynState,
     pub transaction: ChainSpecT::SignedTransaction,
@@ -149,6 +151,7 @@ fn run_with_gas_limit<ChainSpecT: ProviderChainSpec<SignedTransaction: Transacti
         context.cfg_env.clone(),
         transaction,
         context.custom_precompiles,
+        context.native_token_mirror,
         observer,
     )
 }
@@ -316,6 +319,7 @@ fn measure_gas_with_full_limit<
             context.cfg_env.clone(),
             context.transaction.clone(),
             context.custom_precompiles,
+            context.native_token_mirror,
             observer,
         )
     })?;

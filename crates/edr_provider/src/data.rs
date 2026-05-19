@@ -30,7 +30,7 @@ use edr_blockchain_api::{
     BlockHashByNumber, BlockchainMetadata, GetBlockchainBlock as _, StateAtBlock as _,
 };
 use edr_blockchain_fork::ForkedBlockchainCreationError as ForkedCreationError;
-use edr_chain_config::ChainConfig;
+use edr_chain_config::{ChainConfig, ChainOverride, NativeTokenMirror};
 use edr_chain_spec::{
     BlockEnvConstructor as _, ChainSpec, EvmSpecId, ExecutableTransaction, HaltReasonTrait,
     TransactionValidation,
@@ -49,6 +49,7 @@ use edr_eth::{
 use edr_evm::{guaranteed_dry_run_with_inspector, ExecutionResultWithMetadata};
 use edr_gas_report::{GasReport, GasReportCreationError, SyncOnCollectedGasReportCallback};
 use edr_mem_pool::{account_next_nonce, MemPool, OrderedTransaction};
+use edr_mirror::NativeTokenMirrorState;
 use edr_precompile::PrecompileFn;
 use edr_primitives::{
     Address, Bytecode, Bytes, HashMap, HashSet, StorageKey, B256, KECCAK_EMPTY, U256,
@@ -305,6 +306,7 @@ pub struct ProviderData<
     current_state_id: StateId,
     block_number_to_state_id: HashTrieMapSync<u64, StateId>,
     contract_decoder: Arc<RwLock<ContractDecoder>>,
+    native_token_mirror: Option<NativeTokenMirror>,
 }
 
 impl<ChainSpecT, TimerT> ProviderData<ChainSpecT, TimerT>
@@ -396,6 +398,11 @@ where
 
     pub fn logger_mut(&mut self) -> &mut dyn SyncLogger<ChainSpecT, TimerT> {
         &mut *self.logger
+    }
+
+    /// Returns the native token mirror configuration, if configured.
+    pub fn native_token_mirror(&self) -> Option<&NativeTokenMirror> {
+        self.native_token_mirror.as_ref()
     }
 
     /// Returns the instance's network ID.
@@ -697,6 +704,7 @@ where
             prev_randao_generator,
             block_time_offset_seconds,
             next_block_base_fee_per_gas,
+            native_token_mirror,
         } = create_blockchain_and_state(runtime_handle.clone(), &config, &timer)?;
 
         let max_cached_states = get_max_cached_states_from_env::<ChainSpecT, TimerT>()?;
@@ -713,6 +721,8 @@ where
             bail_on_call_failure,
             bail_on_transaction_failure,
             base_fee_params,
+            // Used by `create_blockchain_and_state`
+            chain_overrides: _chain_overrides,
             // Used by `create_blockchain_and_state`
             chain_id: _chain_id,
             coinbase: beneficiary,
@@ -805,6 +815,7 @@ where
             current_state_id,
             block_number_to_state_id,
             contract_decoder,
+            native_token_mirror,
         })
     }
 
@@ -815,7 +826,12 @@ where
         address: &Address,
     ) -> Result<u64, ProviderErrorForChainSpec<ChainSpecT>> {
         let state = self.current_state()?;
-        account_next_nonce(&self.mem_pool, &*state, address).map_err(Into::into)
+        if let Some(native_token_mirror) = &self.native_token_mirror {
+            let state = NativeTokenMirrorState::new(&*state, native_token_mirror);
+            account_next_nonce(&self.mem_pool, &state, address).map_err(Into::into)
+        } else {
+            account_next_nonce(&self.mem_pool, &*state, address).map_err(Into::into)
+        }
     }
 
     /// Adds a filter for new blocks to the provider.
@@ -956,6 +972,56 @@ where
         }
     }
 
+    fn apply_native_token_mirror_account_change(
+        &self,
+        diff: &mut StateDiff,
+        state: &mut Box<dyn DynState>,
+        address: Address,
+        balance: U256,
+    ) -> Result<(), ProviderErrorForChainSpec<ChainSpecT>> {
+        let Some(native_token_mirror) = &self.native_token_mirror else {
+            return Ok(());
+        };
+
+        let mirror_balance = native_token_mirror.native_to_erc20_balance(balance);
+        let storage_key = native_token_mirror.balance_storage_key(address);
+        let old_value = state.set_account_storage_slot(
+            native_token_mirror.token,
+            storage_key,
+            mirror_balance,
+        )?;
+        let slot = EvmStorageSlot::new_changed(old_value, mirror_balance, 0);
+        let account_info =
+            state
+                .basic(native_token_mirror.token)
+                .and_then(|mut account_info| {
+                    if let Some(account_info) = &mut account_info
+                        && account_info.code_hash != KECCAK_EMPTY
+                    {
+                        account_info.code = Some(state.code_by_hash(account_info.code_hash)?);
+                    }
+
+                    Ok(account_info)
+                })?;
+
+        diff.apply_storage_change(native_token_mirror.token, storage_key, slot, account_info);
+
+        Ok(())
+    }
+
+    fn apply_native_token_mirror_storage_change(
+        &self,
+        diff: &mut StateDiff,
+        state: &mut Box<dyn DynState>,
+        address: Address,
+        index: U256,
+        value: U256,
+    ) -> Result<(), ProviderErrorForChainSpec<ChainSpecT>> {
+        let _ = (diff, state, address, index, value);
+
+        Ok(())
+    }
+
     pub fn logs(
         &self,
         filter: LogFilter,
@@ -994,6 +1060,16 @@ where
             Ok(account_info)
         })?;
 
+        let mut diff = StateDiff::default();
+        diff.apply_storage_change(address, index, slot, account_info);
+        self.apply_native_token_mirror_storage_change(
+            &mut diff,
+            &mut modified_state,
+            address,
+            index,
+            value,
+        )?;
+
         let state_root = modified_state.state_root()?;
 
         let block_number = self.blockchain.last_block_number();
@@ -1001,7 +1077,7 @@ where
             .state_override_at_block_number(block_number)
             .or_insert_with(|| StateOverride::with_state_root(state_root))
             .diff
-            .apply_storage_change(address, index, slot, account_info);
+            .apply_diff(diff.into());
 
         self.add_state_to_cache(modified_state, block_number);
 
@@ -1021,16 +1097,30 @@ where
             })),
         )?;
 
+        let mut diff = StateDiff::default();
+        diff.apply_account_change(address, account_info.clone());
+        self.apply_native_token_mirror_account_change(
+            &mut diff,
+            &mut modified_state,
+            address,
+            balance,
+        )?;
+
         let state_root = modified_state.state_root()?;
 
-        self.mem_pool.update(&modified_state)?;
+        if let Some(native_token_mirror) = &self.native_token_mirror {
+            let state = NativeTokenMirrorState::new(&*modified_state, native_token_mirror);
+            self.mem_pool.update(&state)?;
+        } else {
+            self.mem_pool.update(&modified_state)?;
+        }
 
         let block_number = self.blockchain.last_block_number();
         self.irregular_state
             .state_override_at_block_number(block_number)
             .or_insert_with(|| StateOverride::with_state_root(state_root))
             .diff
-            .apply_account_change(address, account_info.clone());
+            .apply_diff(diff.into());
 
         self.add_state_to_cache(modified_state, block_number);
 
@@ -1181,7 +1271,12 @@ where
 
         let state_root = modified_state.state_root()?;
 
-        self.mem_pool.update(&modified_state)?;
+        if let Some(native_token_mirror) = &self.native_token_mirror {
+            let state = NativeTokenMirrorState::new(&*modified_state, native_token_mirror);
+            self.mem_pool.update(&state)?;
+        } else {
+            self.mem_pool.update(&modified_state)?;
+        }
 
         let block_number = self.last_block_number();
         self.irregular_state
@@ -1296,7 +1391,12 @@ where
 
         let state = self.current_state()?;
         // Handles validation
-        self.mem_pool.add_transaction(&*state, transaction)?;
+        if let Some(native_token_mirror) = &self.native_token_mirror {
+            let state = NativeTokenMirrorState::new(&*state, native_token_mirror);
+            self.mem_pool.add_transaction(&state, transaction)?;
+        } else {
+            self.mem_pool.add_transaction(&*state, transaction)?;
+        }
 
         self.notify_subscribers_about_pending_transaction(&transaction_hash);
 
@@ -1445,6 +1545,20 @@ where
             .clone())
     }
 
+    fn apply_native_token_mirror_state_diff(
+        &self,
+        state_diff: &mut StateDiff,
+        state: &mut dyn DynState,
+    ) -> Result<(), ProviderErrorForChainSpec<ChainSpecT>> {
+        let Some(native_token_mirror) = &self.native_token_mirror else {
+            return Ok(());
+        };
+
+        edr_mirror::apply_native_token_mirror_state_diff(native_token_mirror, state_diff, state)?;
+
+        Ok(())
+    }
+
     fn mine_and_commit_block_impl(
         &mut self,
         mine_fn: impl FnOnce(
@@ -1468,7 +1582,11 @@ where
         let (block_timestamp, new_offset) = self.next_block_timestamp(options.timestamp)?;
         options.timestamp = Some(block_timestamp);
 
-        let result = self.mine_block(mine_fn, options)?;
+        let mut result = self.mine_block(mine_fn, options)?;
+        self.apply_native_token_mirror_state_diff(
+            &mut result.block_and_state.state_diff,
+            result.block_and_state.state.as_mut(),
+        )?;
 
         let block_and_total_difficulty = self
             .blockchain
@@ -1840,12 +1958,24 @@ where
         address: Address,
         block_spec: Option<&BlockSpec>,
     ) -> Result<U256, ProviderErrorForChainSpec<ChainSpecT>> {
+        let native_token_mirror = self.native_token_mirror.clone();
         self.execute_in_block_context::<Result<U256, ProviderErrorForChainSpec<ChainSpecT>>>(
             block_spec,
             move |_blockchain, _block, state| {
-                Ok(state
+                if let Some(native_token_mirror) = &native_token_mirror {
+                    return edr_mirror::native_token_mirror_account_info(
+                        state,
+                        native_token_mirror,
+                        address,
+                    )
+                    .map(|account| account.map_or(U256::ZERO, |account| account.balance))
+                    .map_err(Into::into);
+                }
+
+                let raw_balance = state
                     .basic(address)?
-                    .map_or(U256::ZERO, |account| account.balance))
+                    .map_or(U256::ZERO, |account| account.balance);
+                Ok(raw_balance)
             },
         )?
     }
@@ -1868,6 +1998,7 @@ where
         };
 
         let custom_precompiles = self.precompile_overrides.clone();
+        let native_token_mirror = self.native_token_mirror.clone();
 
         let scheduled_blob_params = self.scheduled_blob_params().cloned();
         self.execute_in_block_context(Some(block_spec), move |blockchain, block, state| {
@@ -1885,6 +2016,7 @@ where
                     transaction.clone(),
                     &block_env,
                     &custom_precompiles,
+                    native_token_mirror.as_ref(),
                     &mut DualInspector::new(&mut debug_inspector, observer),
                 )
                 .map_err(ProviderError::RunTransaction)
@@ -1892,6 +2024,7 @@ where
 
             let mut database = WrapDatabaseRef(DatabaseComponents {
                 blockchain,
+                native_token_mirror: native_token_mirror.clone(),
                 state: state.as_ref(),
             });
 
@@ -2362,6 +2495,7 @@ where
 
         let contract_decoder = Arc::clone(&self.contract_decoder);
         let scheduled_blob_params = self.scheduled_blob_params().cloned();
+        let native_token_mirror = self.native_token_mirror.clone();
 
         self.execute_in_block_context(Some(block_spec), |blockchain, block, state| {
             let state_overrider = StateRefOverrider::new(state_overrides, state.as_ref());
@@ -2378,7 +2512,8 @@ where
                     state_overrider,
                     cfg_env,
                     transaction.clone(),
-                        &custom_precompiles,
+                    &custom_precompiles,
+                    native_token_mirror.as_ref(),
                     observer,
                 )
             })?;
@@ -2474,6 +2609,7 @@ where
             reward,
             Some(evm_observer),
             &self.precompile_overrides,
+            self.native_token_mirror.as_ref(),
         )?;
 
         Ok(result)
@@ -2508,6 +2644,7 @@ where
             reward,
             Some(evm_observer),
             &self.precompile_overrides,
+            self.native_token_mirror.as_ref(),
         )?;
 
         let inspector_data = evm_observer.flush_and_report(&result.precompile_addresses)?;
@@ -2762,6 +2899,7 @@ where
         let contract_decoder = Arc::clone(&self.contract_decoder);
         let scheduled_blob_params = self.scheduled_blob_params().cloned();
         let estimation_mode = self.gas_estimation_mode;
+        let native_token_mirror = self.native_token_mirror.clone();
 
         self.execute_in_block_context(Some(block_spec), |blockchain, block, state| {
             let context = gas::GasCallContext {
@@ -2769,6 +2907,7 @@ where
                 cfg_env,
                 custom_precompiles: &custom_precompiles,
                 header: block.block_header(),
+                native_token_mirror: native_token_mirror.as_ref(),
                 scheduled_blob_params: scheduled_blob_params.as_ref(),
                 state,
                 transaction,
@@ -2809,6 +2948,35 @@ struct BlockchainAndState<ChainSpecT: BlockChainSpec> {
     prev_randao_generator: RandomHashGenerator,
     block_time_offset_seconds: i64,
     next_block_base_fee_per_gas: Option<u128>,
+    native_token_mirror: Option<NativeTokenMirror>,
+}
+
+fn apply_chain_overrides<ChainSpecT, TimerT>(
+    chain_configs: &mut HashMap<u64, ChainConfig<ChainSpecT::Hardfork>>,
+    config: &ProviderConfig<ChainSpecT::Hardfork>,
+    chain_overrides: &HashMap<u64, ChainOverride<ChainSpecT::Hardfork>>,
+) where
+    ChainSpecT: SyncProviderSpec<TimerT>,
+    TimerT: Clone + TimeSinceEpoch,
+{
+    for (chain_id, chain_override) in chain_overrides {
+        chain_configs
+            .entry(*chain_id)
+            .and_modify(|chain_config| chain_config.apply_override(chain_override))
+            .or_insert_with(|| ChainConfig {
+                name: chain_override.name.clone(),
+                hardfork_activations: chain_override
+                    .hardfork_activation_overrides
+                    .clone()
+                    .unwrap_or_default(),
+                base_fee_params: config
+                    .base_fee_params
+                    .clone()
+                    .unwrap_or_else(|| ChainSpecT::default_base_fee_params().clone()),
+                bpo_hardfork_schedule: None,
+                native_token_mirror: chain_override.native_token_mirror.clone(),
+            });
+    }
 }
 
 fn create_forked_blockchain_and_state<
@@ -2843,27 +3011,24 @@ fn create_forked_blockchain_and_state<
     )?);
 
     let mut chain_configs = ChainSpecT::chain_configs().clone();
-    for (chain_id, chain_override) in fork_config.chain_overrides.iter() {
-        chain_configs
-            .entry(*chain_id)
-            .and_modify(|chain_config| chain_config.apply_override(chain_override))
-            .or_insert_with(|| ChainConfig {
-                name: chain_override.name.clone(),
-                hardfork_activations: chain_override
-                    .hardfork_activation_overrides
-                    .clone()
-                    .unwrap_or_default(),
-                base_fee_params: config
-                    .base_fee_params
-                    .clone()
-                    .unwrap_or_else(|| ChainSpecT::default_base_fee_params().clone()),
-                bpo_hardfork_schedule: None,
-            });
-    }
+    apply_chain_overrides::<ChainSpecT, TimerT>(
+        &mut chain_configs,
+        config,
+        &config.chain_overrides,
+    );
+    apply_chain_overrides::<ChainSpecT, TimerT>(
+        &mut chain_configs,
+        config,
+        &fork_config.chain_overrides,
+    );
 
     let scheduled_blob_params = chain_configs
         .get(&config.chain_id)
         .and_then(|chain_config| chain_config.bpo_hardfork_schedule.clone());
+
+    let native_token_mirror = chain_configs
+        .get(&config.chain_id)
+        .and_then(|chain_config| chain_config.native_token_mirror.clone());
 
     let base_fee_params = config.base_fee_params.clone().unwrap_or_else(|| {
         chain_configs.get(&config.chain_id).cloned().map_or_else(
@@ -3027,6 +3192,7 @@ fn create_forked_blockchain_and_state<
         prev_randao_generator,
         block_time_offset_seconds,
         next_block_base_fee_per_gas,
+        native_token_mirror,
     })
 }
 
@@ -3077,26 +3243,35 @@ fn create_local_blockchain_and_state<
         })
         .collect();
 
-    let base_fee_params = config.base_fee_params.as_ref().unwrap_or_else(|| {
-        ChainSpecT::chain_configs()
-            .get(&config.chain_id)
-            .map_or_else(ChainSpecT::default_base_fee_params, |chain_config| {
-                &chain_config.base_fee_params
-            })
+    let mut chain_configs = ChainSpecT::chain_configs().clone();
+    apply_chain_overrides::<ChainSpecT, TimerT>(
+        &mut chain_configs,
+        config,
+        &config.chain_overrides,
+    );
+    let base_fee_params = config.base_fee_params.clone().unwrap_or_else(|| {
+        chain_configs.get(&config.chain_id).map_or_else(
+            || ChainSpecT::default_base_fee_params().clone(),
+            |chain_config| chain_config.base_fee_params.clone(),
+        )
     });
 
-    let scheduled_blob_params = ChainSpecT::chain_configs()
+    let native_token_mirror = chain_configs
+        .get(&config.chain_id)
+        .and_then(|config| config.native_token_mirror.clone());
+
+    let scheduled_blob_params = chain_configs
         .get(&config.chain_id)
         .and_then(|config| config.bpo_hardfork_schedule.clone());
 
     let block_config = BlockConfig {
-        base_fee_params: base_fee_params.clone(),
+        base_fee_params,
         hardfork: config.hardfork,
         min_ethash_difficulty: ChainSpecT::MIN_ETHASH_DIFFICULTY,
         scheduled_blob_params,
     };
 
-    let genesis_diff = StateDiff::from(genesis_state);
+    let mut genesis_diff = StateDiff::from(genesis_state);
     let genesis_timestamp = if let Some(initial_time) = local_config.genesis_block_time {
         Some(
             initial_time
@@ -3107,6 +3282,29 @@ fn create_local_blockchain_and_state<
     } else {
         None
     };
+    if let Some(native_token_mirror) = &native_token_mirror {
+        let token_account_info = genesis_diff
+            .as_inner()
+            .get(&native_token_mirror.token)
+            .map(|account| account.info.clone());
+        let mirrored_balances = genesis_diff
+            .as_inner()
+            .iter()
+            .map(|(address, account)| (*address, account.info.balance))
+            .collect::<Vec<_>>();
+
+        for (address, native_balance) in mirrored_balances {
+            let erc20_balance = native_token_mirror.native_to_erc20_balance(native_balance);
+            let storage_key = native_token_mirror.balance_storage_key(address);
+            let slot = EvmStorageSlot::new_changed(U256::ZERO, erc20_balance, 0);
+            genesis_diff.apply_storage_change(
+                native_token_mirror.token,
+                storage_key,
+                slot,
+                token_account_info.clone(),
+            );
+        }
+    }
 
     let genesis_block = ChainSpecT::genesis_block(
         genesis_diff.clone(),
@@ -3159,6 +3357,7 @@ fn create_local_blockchain_and_state<
         // For local blockchain the initial base fee per gas config option is incorporated as
         // part of the genesis block.
         next_block_base_fee_per_gas: None,
+        native_token_mirror,
     })
 }
 

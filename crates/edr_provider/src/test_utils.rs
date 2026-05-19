@@ -234,6 +234,7 @@ pub fn create_test_config_with<HardforkT: Default>(
         bail_on_call_failure: false,
         bail_on_transaction_failure: false,
         base_fee_params: None,
+        chain_overrides: HashMap::default(),
         gas_estimation_mode: GasEstimationMode::TopLevelSuccess,
         chain_id: 123,
         coinbase: Address::from(U160::from(1)),

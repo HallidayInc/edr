@@ -204,6 +204,7 @@ pub struct ProviderConfig<HardforkT> {
     /// Whether to return an `Err` when a `eth_sendTransaction` fails
     pub bail_on_transaction_failure: bool,
     pub base_fee_params: Option<BaseFeeParams<HardforkT>>,
+    pub chain_overrides: HashMap<ChainId, ChainOverride<HardforkT>>,
     pub chain_id: ChainId,
     pub coinbase: Address,
     /// The default transaction gas limit to use for RPC call and transaction
