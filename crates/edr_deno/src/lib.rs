@@ -1,39 +1,46 @@
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use ansi_term::Color;
 use core::str::FromStr;
+use std::{
+    collections::HashSet,
+    num::NonZeroU64,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
+};
+
+use ansi_term::Color;
 use deno_bindgen::deno_bindgen;
 use edr_block_api::Block as _;
-use edr_rpc_client::{
-    cache::{CacheableMethod, key::{ReadCacheKey, WriteCacheKey}},
-    header::{self, HeaderValue},
-    HeaderMap, RpcClient, RpcMethod,
+use edr_chain_config::{
+    ChainOverride, ForkCondition, HardforkActivation, HardforkActivations, NativeTokenMirror,
 };
-use edr_chain_config::{ChainOverride, ForkCondition, HardforkActivation, HardforkActivations};
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
 use edr_chain_spec_provider::ProviderChainSpec;
 use edr_generic::{ApeChainSpec, ArbChainSpec, GenericChainSpec, APE_PRECOMPILE_STATE_ADDRESS};
 use edr_op::{self, OpChainSpec};
-use edr_primitives::{Address, Bytecode, Bytes, HashMap, U64, U256};
+use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
 use edr_provider::{
     test_utils, time::CurrentTime, AccountOverride, InvalidRequestReason, Provider,
 };
-use edr_rpc_client::jsonrpc;
+use edr_rpc_client::{
+    cache::{
+        key::{ReadCacheKey, WriteCacheKey},
+        CacheableMethod,
+    },
+    header::{self, HeaderValue},
+    jsonrpc, HeaderMap, RpcClient, RpcMethod,
+};
 use edr_signer::{public_key_to_address, SecretKey, SignatureError};
 use edr_solidity::{artifacts::BuildInfoConfig, contract_decoder::ContractDecoder};
 use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
-use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
+use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
-use std::{
-    collections::HashSet,
-    num::NonZeroU64,
-    path::PathBuf,
-    sync::atomic::{AtomicU32, Ordering},
-    sync::{Arc, Mutex},
-};
 use tokio::runtime::Runtime;
 
 const APE_ARBOWNERPUBLIC_ADDRESS: &str = "0x000000000000000000000000000000000000006b";
@@ -76,6 +83,70 @@ fn parse_u128<E: serde::de::Error>(val: JsonValue) -> Result<u128, E> {
         JsonValue::String(s) => s.parse::<u128>().map_err(E::custom),
         _ => Err(E::custom("expected number or string")),
     }
+}
+
+fn parse_u256<E: serde::de::Error>(val: JsonValue) -> Result<U256, E> {
+    match val {
+        JsonValue::Number(n) => n
+            .as_u64()
+            .map(U256::from)
+            .ok_or_else(|| E::custom("invalid u256 number")),
+        JsonValue::String(s) => U256::from_str(&s).map_err(E::custom),
+        _ => Err(E::custom("expected number or string")),
+    }
+}
+
+fn deserialize_u256_from_str_or_int<'de, D>(deserializer: D) -> Result<U256, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let val = JsonValue::deserialize(deserializer)?;
+    parse_u256::<D::Error>(val)
+}
+
+fn parse_address<E: serde::de::Error>(val: JsonValue) -> Result<Address, E> {
+    match val {
+        JsonValue::String(s) => Address::from_str(&s).map_err(E::custom),
+        JsonValue::Array(bytes) => {
+            let bytes = bytes
+                .into_iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| E::custom("invalid address byte"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if bytes.len() != 20 {
+                return Err(E::custom("address must be 20 bytes"));
+            }
+            Ok(Address::from_slice(&bytes))
+        }
+        JsonValue::Object(bytes) => {
+            let bytes = (0..bytes.len())
+                .map(|index| {
+                    bytes
+                        .get(&index.to_string())
+                        .and_then(JsonValue::as_u64)
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| E::custom("invalid address byte"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if bytes.len() != 20 {
+                return Err(E::custom("address must be 20 bytes"));
+            }
+            Ok(Address::from_slice(&bytes))
+        }
+        _ => Err(E::custom("expected address string or bytes")),
+    }
+}
+
+fn deserialize_address_from_str_or_bytes<'de, D>(deserializer: D) -> Result<Address, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let val = JsonValue::deserialize(deserializer)?;
+    parse_address::<D::Error>(val)
 }
 
 fn deserialize_opt_u128_from_str_or_int<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
@@ -165,6 +236,14 @@ impl RpcMethod for ApeRequestMethod {
     fn chain_id_request() -> Self {
         Self::ChainId(())
     }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Call(_, _) => "eth_call",
+            Self::BlockNumber(_) => "eth_blockNumber",
+            Self::ChainId(_) => "eth_chainId",
+        }
+    }
 }
 
 fn rpc_headers(headers: Option<&[HttpHeader]>) -> Option<HeaderMap> {
@@ -190,7 +269,10 @@ fn fetch_ape_precompile_word(
         block_param,
     );
 
-    runtime().block_on(client.call::<String>(call)).ok().and_then(|result| U256::from_str(&result).ok())
+    runtime()
+        .block_on(client.call::<String>(call))
+        .ok()
+        .and_then(|result| U256::from_str(&result).ok())
 }
 
 fn fetch_ape_precompile_state(fork: Option<&ForkConfig>) -> ApePrecompileState {
@@ -212,8 +294,16 @@ fn fetch_ape_precompile_state(fork: Option<&ForkConfig>) -> ApePrecompileState {
     };
 
     ApePrecompileState {
-        share_price: fetch_ape_precompile_word(&client, APE_GET_SHARE_PRICE_SELECTOR, block_param.clone()),
-        share_count: fetch_ape_precompile_word(&client, APE_GET_SHARE_COUNT_SELECTOR, block_param.clone()),
+        share_price: fetch_ape_precompile_word(
+            &client,
+            APE_GET_SHARE_PRICE_SELECTOR,
+            block_param.clone(),
+        ),
+        share_count: fetch_ape_precompile_word(
+            &client,
+            APE_GET_SHARE_COUNT_SELECTOR,
+            block_param.clone(),
+        ),
         apy: fetch_ape_precompile_word(&client, APE_GET_APY_SELECTOR, block_param),
     }
 }
@@ -309,7 +399,9 @@ fn parse_op_spec_id(name: &str) -> Option<edr_op::Hardfork> {
 }
 
 fn default_l1_activations() -> Option<HardforkActivations<l1::Hardfork>> {
-    L1ChainSpec::chain_configs().get(&1).map(|config| config.hardfork_activations.clone())
+    L1ChainSpec::chain_configs()
+        .get(&1)
+        .map(|config| config.hardfork_activations.clone())
 }
 
 #[derive(Deserialize)]
@@ -350,6 +442,8 @@ struct ProviderOptions {
     #[serde(default)]
     chains: Option<Vec<ChainConfig>>,
     #[serde(default)]
+    native_token_mirror: Option<NativeTokenMirrorConfig>,
+    #[serde(default)]
     allow_unlimited_contract_size: Option<bool>,
     #[serde(default)]
     allow_blocks_with_same_timestamp: Option<bool>,
@@ -384,7 +478,101 @@ struct HardforkActivationConfig {
 struct ChainConfig {
     #[serde(deserialize_with = "deserialize_u64_from_str_or_int")]
     chain_id: u64,
+    #[serde(default)]
     hardforks: Vec<HardforkActivationConfig>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeTokenMirrorConfig {
+    #[serde(deserialize_with = "deserialize_address_from_str_or_bytes")]
+    token: Address,
+    #[serde(default)]
+    decimals: Option<u8>,
+    #[serde(deserialize_with = "deserialize_u256_from_str_or_int")]
+    balance_slot: U256,
+}
+
+impl From<&NativeTokenMirrorConfig> for NativeTokenMirror {
+    fn from(value: &NativeTokenMirrorConfig) -> Self {
+        Self {
+            token: value.token,
+            decimals: value.decimals,
+            balance_slot: value.balance_slot,
+        }
+    }
+}
+
+fn chain_overrides<HardforkT: Clone>(
+    chains: &[ChainConfig],
+    parse_spec_id: impl Fn(&str) -> Option<HardforkT>,
+) -> HashMap<u64, ChainOverride<HardforkT>> {
+    let mut chain_overrides = HashMap::default();
+    for c in chains {
+        let mut activations = Vec::new();
+        for hf in &c.hardforks {
+            if let Some(spec) = parse_spec_id(&hf.spec_id) {
+                activations.push(HardforkActivation {
+                    condition: ForkCondition::Block(hf.block_number),
+                    hardfork: spec,
+                });
+            }
+        }
+
+        if !activations.is_empty() {
+            chain_overrides.insert(
+                c.chain_id,
+                ChainOverride {
+                    name: String::new(),
+                    native_token_mirror: None,
+                    hardfork_activation_overrides: (!activations.is_empty())
+                        .then(|| HardforkActivations::new(activations)),
+                },
+            );
+        }
+    }
+
+    chain_overrides
+}
+
+fn insert_native_token_mirror_override<HardforkT>(
+    chain_overrides: &mut HashMap<u64, ChainOverride<HardforkT>>,
+    chain_id: u64,
+    native_token_mirror: Option<&NativeTokenMirrorConfig>,
+) {
+    let Some(native_token_mirror) = native_token_mirror else {
+        return;
+    };
+
+    chain_overrides
+        .entry(chain_id)
+        .and_modify(|chain_override| {
+            chain_override.native_token_mirror = Some(native_token_mirror.into());
+        })
+        .or_insert_with(|| ChainOverride {
+            name: String::new(),
+            hardfork_activation_overrides: None,
+            native_token_mirror: Some(native_token_mirror.into()),
+        });
+}
+
+fn insert_default_l1_activations<HardforkT: Clone>(
+    chain_overrides: &mut HashMap<u64, ChainOverride<HardforkT>>,
+    chain_id: u64,
+    activations: &HardforkActivations<HardforkT>,
+) {
+    chain_overrides
+        .entry(chain_id)
+        .and_modify(|chain_override| {
+            if chain_override.hardfork_activation_overrides.is_none() {
+                chain_override.hardfork_activation_overrides = Some(activations.clone());
+            }
+        })
+        .or_insert_with(|| ChainOverride {
+            name: String::new(),
+            native_token_mirror: None,
+            hardfork_activation_overrides: Some(activations.clone()),
+        });
 }
 
 #[derive(Clone, Deserialize)]
@@ -695,7 +883,8 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Creates a new provider within the provided context using the given JSON configuration.
+/// Creates a new provider within the provided context using the given JSON
+/// configuration.
 #[deno_bindgen]
 pub fn provider_new(
     context_id: u32,
@@ -760,28 +949,7 @@ pub fn provider_new(
                 let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
                     HashMap::default();
                 if let Some(chains) = &opts.chains {
-                    for c in chains {
-                        let mut activations = Vec::new();
-                        for hf in &c.hardforks {
-                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                                activations.push(HardforkActivation {
-                                    condition: ForkCondition::Block(hf.block_number),
-                                    hardfork: spec,
-                                });
-                            }
-                        }
-                        if !activations.is_empty() {
-                            chain_overrides.insert(
-                                c.chain_id,
-                                ChainOverride {
-                                    name: String::new(),
-                                    hardfork_activation_overrides: Some(
-                                        HardforkActivations::new(activations),
-                                    ),
-                                },
-                            );
-                        }
-                    }
+                    chain_overrides = self::chain_overrides(chains, parse_l1_spec_id);
                 }
                 edr_provider::ForkConfig {
                     block_number: f.block_number,
@@ -838,6 +1006,17 @@ pub fn provider_new(
                     cfg.hardfork = spec;
                 }
             }
+            if let Some(chains) = &opts.chains
+                && !chains.is_empty()
+            {
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_l1_spec_id));
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -861,28 +1040,7 @@ pub fn provider_new(
                 let mut chain_overrides: HashMap<u64, ChainOverride<edr_op::Hardfork>> =
                     HashMap::default();
                 if let Some(chains) = &opts.chains {
-                    for c in chains {
-                        let mut activations = Vec::new();
-                        for hf in &c.hardforks {
-                            if let Some(spec) = parse_op_spec_id(&hf.spec_id) {
-                                activations.push(HardforkActivation {
-                                    condition: ForkCondition::Block(hf.block_number),
-                                    hardfork: spec,
-                                });
-                            }
-                        }
-                        if !activations.is_empty() {
-                            chain_overrides.insert(
-                                c.chain_id,
-                                ChainOverride {
-                                    name: String::new(),
-                                    hardfork_activation_overrides: Some(
-                                        HardforkActivations::new(activations),
-                                    ),
-                                },
-                            );
-                        }
-                    }
+                    chain_overrides = self::chain_overrides(chains, parse_op_spec_id);
                 }
                 edr_provider::ForkConfig {
                     block_number: f.block_number,
@@ -939,6 +1097,17 @@ pub fn provider_new(
                     cfg.hardfork = spec;
                 }
             }
+            if let Some(chains) = &opts.chains
+                && !chains.is_empty()
+            {
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_op_spec_id));
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -962,28 +1131,7 @@ pub fn provider_new(
                 let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
                     HashMap::default();
                 if let Some(chains) = &opts.chains {
-                    for c in chains {
-                        let mut activations = Vec::new();
-                        for hf in &c.hardforks {
-                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                                activations.push(HardforkActivation {
-                                    condition: ForkCondition::Block(hf.block_number),
-                                    hardfork: spec,
-                                });
-                            }
-                        }
-                        if !activations.is_empty() {
-                            chain_overrides.insert(
-                                c.chain_id,
-                                ChainOverride {
-                                    name: String::new(),
-                                    hardfork_activation_overrides: Some(
-                                        HardforkActivations::new(activations),
-                                    ),
-                                },
-                            );
-                        }
-                    }
+                    chain_overrides = self::chain_overrides(chains, parse_l1_spec_id);
                 }
                 edr_provider::ForkConfig {
                     block_number: f.block_number,
@@ -1041,40 +1189,19 @@ pub fn provider_new(
                 }
             }
             if let Some(chains) = &opts.chains {
-                if chains.is_empty() {
-                    if let Some(acts) = default_l1_activations() {
-                        let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                            block_number: None,
-                            cache_dir: PathBuf::new(),
-                            chain_overrides: HashMap::default(),
-                            http_headers: None,
-                            url: String::new(),
-                        });
-                        fork_cfg.chain_overrides.insert(
-                            cfg.chain_id,
-                            ChainOverride {
-                                name: String::new(),
-                                hardfork_activation_overrides: Some(acts.clone()),
-                            },
-                        );
-                    }
-                }
-            } else if let Some(acts) = default_l1_activations() {
-                let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                    block_number: None,
-                    cache_dir: PathBuf::new(),
-                    chain_overrides: HashMap::default(),
-                    http_headers: None,
-                    url: String::new(),
-                });
-                fork_cfg.chain_overrides.insert(
-                    cfg.chain_id,
-                    ChainOverride {
-                        name: String::new(),
-                        hardfork_activation_overrides: Some(acts.clone()),
-                    },
-                );
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
+            if !cfg.chain_overrides.contains_key(&cfg.chain_id)
+                && let Some(acts) = default_l1_activations()
+            {
+                insert_default_l1_activations(&mut cfg.chain_overrides, cfg.chain_id, &acts);
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1098,28 +1225,7 @@ pub fn provider_new(
                 let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
                     HashMap::default();
                 if let Some(chains) = &opts.chains {
-                    for c in chains {
-                        let mut activations = Vec::new();
-                        for hf in &c.hardforks {
-                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                                activations.push(HardforkActivation {
-                                    condition: ForkCondition::Block(hf.block_number),
-                                    hardfork: spec,
-                                });
-                            }
-                        }
-                        if !activations.is_empty() {
-                            chain_overrides.insert(
-                                c.chain_id,
-                                ChainOverride {
-                                    name: String::new(),
-                                    hardfork_activation_overrides: Some(
-                                        HardforkActivations::new(activations),
-                                    ),
-                                },
-                            );
-                        }
-                    }
+                    chain_overrides = self::chain_overrides(chains, parse_l1_spec_id);
                 }
                 edr_provider::ForkConfig {
                     block_number: f.block_number,
@@ -1177,40 +1283,19 @@ pub fn provider_new(
                 }
             }
             if let Some(chains) = &opts.chains {
-                if chains.is_empty() {
-                    if let Some(acts) = default_l1_activations() {
-                        let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                            block_number: None,
-                            cache_dir: PathBuf::new(),
-                            chain_overrides: HashMap::default(),
-                            http_headers: None,
-                            url: String::new(),
-                        });
-                        fork_cfg.chain_overrides.insert(
-                            cfg.chain_id,
-                            ChainOverride {
-                                name: String::new(),
-                                hardfork_activation_overrides: Some(acts.clone()),
-                            },
-                        );
-                    }
-                }
-            } else if let Some(acts) = default_l1_activations() {
-                let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                    block_number: None,
-                    cache_dir: PathBuf::new(),
-                    chain_overrides: HashMap::default(),
-                    http_headers: None,
-                    url: String::new(),
-                });
-                fork_cfg.chain_overrides.insert(
-                    cfg.chain_id,
-                    ChainOverride {
-                        name: String::new(),
-                        hardfork_activation_overrides: Some(acts.clone()),
-                    },
-                );
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
+            if !cfg.chain_overrides.contains_key(&cfg.chain_id)
+                && let Some(acts) = default_l1_activations()
+            {
+                insert_default_l1_activations(&mut cfg.chain_overrides, cfg.chain_id, &acts);
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1234,28 +1319,7 @@ pub fn provider_new(
                 let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
                     HashMap::default();
                 if let Some(chains) = &opts.chains {
-                    for c in chains {
-                        let mut activations = Vec::new();
-                        for hf in &c.hardforks {
-                            if let Some(spec) = parse_l1_spec_id(&hf.spec_id) {
-                                activations.push(HardforkActivation {
-                                    condition: ForkCondition::Block(hf.block_number),
-                                    hardfork: spec,
-                                });
-                            }
-                        }
-                        if !activations.is_empty() {
-                            chain_overrides.insert(
-                                c.chain_id,
-                                ChainOverride {
-                                    name: String::new(),
-                                    hardfork_activation_overrides: Some(
-                                        HardforkActivations::new(activations),
-                                    ),
-                                },
-                            );
-                        }
-                    }
+                    chain_overrides = self::chain_overrides(chains, parse_l1_spec_id);
                 }
                 edr_provider::ForkConfig {
                     block_number: f.block_number,
@@ -1313,40 +1377,19 @@ pub fn provider_new(
                 }
             }
             if let Some(chains) = &opts.chains {
-                if chains.is_empty() {
-                    if let Some(acts) = default_l1_activations() {
-                        let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                            block_number: None,
-                            cache_dir: PathBuf::new(),
-                            chain_overrides: HashMap::default(),
-                            http_headers: None,
-                            url: String::new(),
-                        });
-                        fork_cfg.chain_overrides.insert(
-                            cfg.chain_id,
-                            ChainOverride {
-                                name: String::new(),
-                                hardfork_activation_overrides: Some(acts.clone()),
-                            },
-                        );
-                    }
-                }
-            } else if let Some(acts) = default_l1_activations() {
-                let fork_cfg = cfg.fork.get_or_insert(edr_provider::ForkConfig {
-                    block_number: None,
-                    cache_dir: PathBuf::new(),
-                    chain_overrides: HashMap::default(),
-                    http_headers: None,
-                    url: String::new(),
-                });
-                fork_cfg.chain_overrides.insert(
-                    cfg.chain_id,
-                    ChainOverride {
-                        name: String::new(),
-                        hardfork_activation_overrides: Some(acts.clone()),
-                    },
-                );
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
+            if !cfg.chain_overrides.contains_key(&cfg.chain_id)
+                && let Some(acts) = default_l1_activations()
+            {
+                insert_default_l1_activations(&mut cfg.chain_overrides, cfg.chain_id, &acts);
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }

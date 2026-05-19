@@ -68,7 +68,7 @@ impl From<ScenarioProviderConfig> for ProviderConfig {
         // to the default directory.
         let fork = value.fork.map(|mut fork_config| {
             fork_config.cache_dir = PathBuf::from(edr_defaults::CACHE_DIR);
-            fork_config.chain_overrides = value.chain_overrides;
+            fork_config.chain_overrides = value.chain_overrides.clone();
 
             fork_config
         });
@@ -81,6 +81,7 @@ impl From<ScenarioProviderConfig> for ProviderConfig {
             base_fee_params: None,
             block_gas_limit: value.block_gas_limit,
             chain_id: value.chain_id,
+            chain_overrides: value.chain_overrides,
             coinbase: value.coinbase,
             fork,
             genesis_state: value.genesis_state,

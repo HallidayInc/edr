@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 use edr_blockchain_api::BlockHashByNumber;
+use edr_chain_config::NativeTokenMirror;
 use edr_primitives::{Address, Bytecode, HashMap, B256, U256};
 use edr_state_api::{
     account::{Account, AccountInfo},
@@ -15,6 +16,8 @@ pub use revm_database_interface::{Database, WrapDatabaseRef};
 pub struct DatabaseComponents<BlockchainT, StateT> {
     /// The blockchain component.
     pub blockchain: BlockchainT,
+    /// Optional native token mirror configuration.
+    pub native_token_mirror: Option<NativeTokenMirror>,
     /// The state component.
     pub state: StateT,
 }
@@ -43,6 +46,15 @@ where
     type Error = DatabaseComponentError<BlockchainT::Error, StateT::Error>;
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        if let Some(native_token_mirror) = &self.native_token_mirror {
+            return edr_mirror::native_token_mirror_account_info(
+                &self.state,
+                native_token_mirror,
+                address,
+            )
+            .map_err(Self::Error::State);
+        }
+
         self.state.basic(address).map_err(Self::Error::State)
     }
 

@@ -106,6 +106,7 @@ fn mainnet_config() -> &'static ChainConfig<Hardfork> {
             hardfork_activations,
             base_fee_params: L1_BASE_FEE_PARAMS,
             bpo_hardfork_schedule: Some(ScheduledBlobParams::mainnet()),
+            native_token_mirror: None,
         }
     })
 }
@@ -147,6 +148,7 @@ fn holesky_config() -> &'static ChainConfig<Hardfork> {
             hardfork_activations,
             base_fee_params: L1_BASE_FEE_PARAMS,
             bpo_hardfork_schedule: Some(ScheduledBlobParams::holesky()),
+            native_token_mirror: None,
         }
     })
 }
@@ -180,6 +182,7 @@ fn hoodi_config() -> &'static ChainConfig<Hardfork> {
             hardfork_activations,
             base_fee_params: L1_BASE_FEE_PARAMS,
             bpo_hardfork_schedule: Some(ScheduledBlobParams::hoodi()),
+            native_token_mirror: None,
         }
     })
 }
@@ -225,6 +228,7 @@ fn sepolia_config() -> &'static ChainConfig<Hardfork> {
             hardfork_activations,
             base_fee_params: L1_BASE_FEE_PARAMS,
             bpo_hardfork_schedule: Some(ScheduledBlobParams::sepolia()),
+            native_token_mirror: None,
         }
     })
 }

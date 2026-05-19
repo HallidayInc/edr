@@ -9,6 +9,7 @@ edr_block_api.workspace = true
 edr_block_header.workspace = true
 edr_block_local.workspace = true
 edr_chain_l1.workspace = true
+edr_mirror.workspace = true
 edr_chain_spec.workspace = true
 edr_chain_spec_block.workspace = true
 edr_chain_spec_evm.workspace = true

@@ -2,6 +2,7 @@
 #![warn(missing_docs)]
 
 use edr_blockchain_api::BlockHashByNumber;
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::{EvmSpecId, TransactionValidation};
 use edr_chain_spec_evm::{
     result::{ExecutionResult, ExecutionResultAndState},
@@ -84,6 +85,7 @@ pub fn dry_run<
     transaction: EvmChainSpecT::SignedTransaction,
     block: BlockT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
 ) -> Result<
     ExecutionResultAndStateWithMetadata<EvmChainSpecT::HaltReason>,
     TransactionError<
@@ -91,15 +93,25 @@ pub fn dry_run<
         <EvmChainSpecT::SignedTransaction as TransactionValidation>::ValidationError,
     >,
 > {
-    let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
+    let database = WrapDatabaseRef(DatabaseComponents {
+        blockchain,
+        native_token_mirror: native_token_mirror.cloned(),
+        state,
+    });
 
     let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
         EvmChainSpecT::PrecompileProvider::default(),
         custom_precompiles.clone(),
     );
 
-    let result =
-        EvmChainSpecT::dry_run(block, cfg, transaction, database, &mut precompile_provider)?;
+    let result = EvmChainSpecT::dry_run(
+        block,
+        cfg,
+        transaction,
+        database,
+        &mut precompile_provider,
+        native_token_mirror.cloned(),
+    )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(
         result,
@@ -136,6 +148,7 @@ pub fn dry_run_with_inspector<
     transaction: EvmChainSpecT::SignedTransaction,
     block: BlockT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
     inspector: &mut InspectorT,
 ) -> Result<
     ExecutionResultAndStateWithMetadata<EvmChainSpecT::HaltReason>,
@@ -144,7 +157,11 @@ pub fn dry_run_with_inspector<
         <EvmChainSpecT::SignedTransaction as TransactionValidation>::ValidationError,
     >,
 > {
-    let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
+    let database = WrapDatabaseRef(DatabaseComponents {
+        blockchain,
+        native_token_mirror: native_token_mirror.cloned(),
+        state,
+    });
 
     let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
         EvmChainSpecT::PrecompileProvider::default(),
@@ -158,6 +175,7 @@ pub fn dry_run_with_inspector<
         database,
         &mut precompile_provider,
         inspector,
+        native_token_mirror.cloned(),
     )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(
@@ -188,6 +206,7 @@ pub fn guaranteed_dry_run<
     transaction: EvmChainSpecT::SignedTransaction,
     block: BlockT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
 ) -> Result<
     ExecutionResultAndStateWithMetadata<EvmChainSpecT::HaltReason>,
     TransactionError<
@@ -204,6 +223,7 @@ pub fn guaranteed_dry_run<
         transaction,
         block,
         custom_precompiles,
+        native_token_mirror,
     )
 }
 
@@ -237,6 +257,7 @@ pub fn guaranteed_dry_run_with_inspector<
     transaction: EvmChainSpecT::SignedTransaction,
     block: BlockT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
     inspector: &mut InspectorT,
 ) -> Result<
     ExecutionResultAndStateWithMetadata<EvmChainSpecT::HaltReason>,
@@ -254,6 +275,7 @@ pub fn guaranteed_dry_run_with_inspector<
         transaction,
         block,
         custom_precompiles,
+        native_token_mirror,
         inspector,
     )
 }
@@ -297,6 +319,7 @@ pub fn run<
         transaction,
         block,
         custom_precompiles,
+        None,
     )?;
 
     state.commit(state_diff);

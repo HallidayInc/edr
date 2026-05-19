@@ -53,7 +53,13 @@ impl StateDiff {
                 Account {
                     info: account_info.unwrap_or_default(),
                     storage,
-                    status: AccountStatus::Created | AccountStatus::Touched,
+                    // Storage changes to pre-existing accounts must not flag the
+                    // account as `Created`; doing so causes `PersistentStateTrie::commit`
+                    // to wipe the account's entire storage trie and re-insert only
+                    // the slots present in the diff, destroying unrelated state
+                    // (notably mirror-token slots for other addresses on chains
+                    // configured with `native_token_mirror`).
+                    status: AccountStatus::Touched,
                     transaction_id: 0,
                 }
             });

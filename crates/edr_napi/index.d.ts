@@ -189,6 +189,16 @@ export interface ChainOverride {
   name: string
   /** If present, overrides for the chain's supported hardforks */
   hardforkActivationOverrides?: Array<HardforkActivation>
+  /** Optional configuration for an ERC-20 balance mirror of the native token. */
+  nativeTokenMirror?: NativeTokenMirror
+}
+export interface NativeTokenMirror {
+  /** The ERC-20 contract address whose balances mirror native token balances. */
+  token: Uint8Array
+  /** Optional decimal precision for the ERC-20 facade. Defaults to 18. */
+  decimals?: number
+  /** The storage slot of the ERC-20 balances mapping. */
+  balanceSlot: bigint
 }
 /** Configuration for a code coverage reporter. */
 export interface CodeCoverageConfig {

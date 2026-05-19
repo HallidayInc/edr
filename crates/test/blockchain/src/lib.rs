@@ -213,7 +213,7 @@ pub fn insert_dummy_block_with_transaction<
     );
 
     let block = EthLocalBlockForChainSpec::<L1ChainSpec>::new::<L1ChainSpec>(
-        &(),
+        &edr_mirror::MirrorContext::new(None),
         blockchain.hardfork(),
         header,
         vec![transaction],
