@@ -1,6 +1,6 @@
 //! A slightly more flexible chain specification for Ethereum Layer 1 chain.
 
-use edr_primitives::{Address, address};
+use edr_primitives::{address, Address};
 
 mod eip2718;
 mod precompiles;

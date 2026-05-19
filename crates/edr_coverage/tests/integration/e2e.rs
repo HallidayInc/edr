@@ -127,6 +127,7 @@ fn call_inc_by(
         signed.into(),
         block_env,
         &HashMap::default(),
+        None,
         &mut coverage_collector,
     )?;
 

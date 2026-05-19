@@ -25,6 +25,7 @@ fn get_provider() -> anyhow::Result<Provider<GenericChainSpec>> {
         hardfork_activation_overrides: Some(HardforkActivations::with_spec_id(
             edr_chain_l1::Hardfork::CANCUN,
         )),
+        native_token_mirror: None,
     };
     let url = json_rpc_url_provider::base_sepolia();
 

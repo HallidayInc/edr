@@ -262,7 +262,6 @@ impl RpcMethod for RequestMethod {
         Self::ChainId(())
     }
 
-    #[cfg(feature = "tracing")]
     fn name(&self) -> &'static str {
         match self {
             Self::BlockNumber(_) => "eth_blockNumber",

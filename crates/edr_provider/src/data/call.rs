@@ -1,5 +1,6 @@
 use edr_block_header::BlockHeader;
 use edr_blockchain_api::{r#dyn::DynBlockchainError, BlockHashByNumber};
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::BlobExcessGasAndPrice;
 use edr_chain_spec_evm::{BlockEnvTrait, CfgEnv, ContextForChainSpec, Inspector};
 use edr_chain_spec_provider::ProviderChainSpec;
@@ -69,6 +70,7 @@ pub(super) fn run_call<'call, ChainSpecT, BlockchainT, InspectorT, StateT>(
     cfg_env: CfgEnv<ChainSpecT::Hardfork>,
     transaction: ChainSpecT::SignedTransaction,
     custom_precompiles: &'call HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&'call NativeTokenMirror>,
     inspector: &'call mut InspectorT,
 ) -> Result<
     ExecutionResultWithMetadata<ChainSpecT::HaltReason>,
@@ -93,6 +95,7 @@ where
         transaction,
         BlockEnvWithZeroBaseFee { inner: block_env },
         custom_precompiles,
+        native_token_mirror,
         inspector,
     )
     .map_or_else(

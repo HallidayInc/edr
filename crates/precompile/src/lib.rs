@@ -44,11 +44,7 @@ impl<
         base: BaseProviderT,
         custom_precompiles: HashMap<Address, PrecompileFn>,
     ) -> Self {
-        let unique_addresses = custom_precompiles
-            .keys()
-            .cloned()
-            .chain(base.warm_addresses())
-            .collect();
+        let unique_addresses = unique_addresses(&base, &custom_precompiles);
 
         Self {
             base,
@@ -81,13 +77,7 @@ impl<
     fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
         let changed = self.base.set_spec(spec);
         if changed {
-            // Update unique addresses
-            self.unique_addresses = self
-                .custom_precompiles
-                .keys()
-                .cloned()
-                .chain(self.base.warm_addresses())
-                .collect();
+            self.unique_addresses = unique_addresses(&self.base, &self.custom_precompiles);
         }
 
         changed
@@ -126,12 +116,27 @@ impl<
     }
 
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(self.unique_addresses.iter().cloned())
+        Box::new(self.unique_addresses.iter().copied())
     }
 
     fn contains(&self, address: &Address) -> bool {
         self.unique_addresses.contains(address)
     }
+}
+
+fn unique_addresses<BaseProviderT, ContextT>(
+    base: &BaseProviderT,
+    custom_precompiles: &HashMap<Address, PrecompileFn>,
+) -> HashSet<Address>
+where
+    BaseProviderT: PrecompileProvider<ContextT, Output = InterpreterResult>,
+    ContextT: ContextTrait,
+{
+    custom_precompiles
+        .keys()
+        .cloned()
+        .chain(base.warm_addresses())
+        .collect()
 }
 
 #[cfg(test)]

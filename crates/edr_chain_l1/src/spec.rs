@@ -14,11 +14,9 @@ use edr_chain_spec::{
 };
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{
-    handler::{EthInstructions, EthPrecompiles},
-    interpreter::InterpreterResult,
-    BlockEnvTrait, CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
-    ExecuteEvm as _, ExecutionResultAndState, InspectEvm as _, Inspector, Journal, LocalContext,
-    PrecompileProvider, TransactionError,
+    handler::EthPrecompiles, interpreter::InterpreterResult, BlockEnvTrait, CfgEnv, Context,
+    ContextForChainSpec, Database, Evm, EvmChainSpec, ExecuteEvm as _, ExecutionResultAndState,
+    InspectEvm as _, Inspector, Journal, LocalContext, PrecompileProvider, TransactionError,
 };
 use edr_chain_spec_provider::ProviderChainSpec;
 use edr_chain_spec_receipt::ReceiptChainSpec;
@@ -82,7 +80,7 @@ impl ChainSpec for L1ChainSpec {
 }
 
 impl ContextChainSpec for L1ChainSpec {
-    type Context = ();
+    type Context = edr_mirror::MirrorContext;
 }
 
 impl EvmChainSpec for L1ChainSpec {
@@ -107,6 +105,7 @@ impl EvmChainSpec for L1ChainSpec {
         transaction: Self::SignedTransaction,
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -120,14 +119,14 @@ impl EvmChainSpec for L1ChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(mirror_config),
             local: LocalContext::default(),
             error: Ok(()),
         };
 
         let mut evm = Evm::new(
             context,
-            EthInstructions::new_mainnet_with_spec(hardfork),
+            edr_mirror::build_instructions(hardfork),
             precompile_provider,
         );
 
@@ -149,6 +148,7 @@ impl EvmChainSpec for L1ChainSpec {
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -166,7 +166,7 @@ impl EvmChainSpec for L1ChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(mirror_config),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -174,7 +174,7 @@ impl EvmChainSpec for L1ChainSpec {
         let mut evm = Evm::new_with_inspector(
             context,
             inspector,
-            EthInstructions::new_mainnet_with_spec(hardfork),
+            edr_mirror::build_instructions(hardfork),
             precompile_provider,
         );
 

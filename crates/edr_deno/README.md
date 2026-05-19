@@ -2,22 +2,17 @@
 
 This crate provides experimental bindings for using **EDR** directly from Deno via [deno_bindgen](https://github.com/denoland/deno_bindgen).
 
-These bindings are still under development and only expose a minimal API.
-The goal is to eventually match the functionality provided by `edr_napi` without requiring an `npm:` style import.
+These bindings are still under development and only expose a minimal API. The goal is to eventually match the functionality provided by `edr_napi` without requiring an `npm:` style import.
 
 ## Usage
 
-Download `nomicfoundation-edr-deno-<version>.tgz` from the project releases and
-extract it next to your source files:
+Download `nomicfoundation-edr-deno-<version>.tgz` from the project releases and extract it next to your source files:
 
 ```bash
 tar xf nomicfoundation-edr-deno-<version>.tgz
 ```
 
-The archive contains precompiled libraries and a `mod.ts` file that automatically loads one.
-Importing `edr/mod.ts` creates a single persistent connection to the Rust runtime.
-Contexts and providers are managed on the Rust side so Deno only tracks that connection.
-Create a context and providers as needed:
+The archive contains precompiled libraries and a `mod.ts` file that automatically loads one. Importing `edr/mod.ts` creates a single persistent connection to the Rust runtime. Contexts and providers are managed on the Rust side so Deno only tracks that connection. Create a context and providers as needed:
 
 ```ts
 import { Context } from "./edr/mod.ts";
@@ -25,8 +20,7 @@ import { Context } from "./edr/mod.ts";
 using ctx = new Context();
 ```
 
-The library exposes a simple context object and provider constructor. The
-constructor accepts a JSON string with the following optional fields:
+The library exposes a simple context object and provider constructor. The constructor accepts a JSON string with the following optional fields:
 
 - `chain`: `"l1"` (default), `"op"` for OP Stack chains like Base, or
 - `"generic"` for custom L1 forks,
@@ -44,8 +38,7 @@ constructor accepts a JSON string with the following optional fields:
 - `minGasPrice`: minimum gas price for the next block
 - `networkId`: set the network ID separately from `chainId`
 - `cacheDir`: directory used to cache RPC responses
-- `ownedAccounts`: array of accounts to pre-fund in the genesis block with the
-  fields `secretKey` and `balance`
+- `ownedAccounts`: array of accounts to pre-fund in the genesis block with the fields `secretKey` and `balance`
 
 `Context.createProvider` also accepts an optional logger configuration:
 
@@ -79,7 +72,8 @@ using provider = ctx.createProvider({
 using local = ctx.createProvider({
   ownedAccounts: [
     {
-      secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      secretKey:
+        "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
       balance: "0xde0b6b3a7640000",
     },
   ],
@@ -107,8 +101,7 @@ const call = JSON.stringify({
   params: [
     {
       to: "0xFF970A61A04b1CA14834A43f5de4533ebddb5CC8",
-      data:
-        "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+      data: "0x70a08231000000000000000000000000ff970a61a04b1ca14834a43f5de4533ebddb5cc8",
     },
     "latest",
   ],
@@ -118,10 +111,7 @@ const json = typeof res.data === "string" ? JSON.parse(res.data) : res.data;
 // `res.data` holds the JSON-RPC response string
 ```
 
-Both `Context` and `Provider` implement synchronous and asynchronous disposers,
-so you can use them with JavaScript's `using` syntax or call their `close()`
-methods manually. Any remaining providers are automatically cleaned up when the
-runtime exits.
+Both `Context` and `Provider` implement synchronous and asynchronous disposers, so you can use them with JavaScript's `using` syntax or call their `close()` methods manually. Any remaining providers are automatically cleaned up when the runtime exits.
 
 ### Local build
 
@@ -131,9 +121,7 @@ Compilation uses the `deno_bindgen` procedural macros which invoke the `deno` bi
 
 ### Testing
 
-Run the following commands to verify the bindings locally. The Deno tests require
-network access and may need certificate validation disabled when running in
-isolated environments:
+Run the following commands to verify the bindings locally. The Deno tests require network access and may need certificate validation disabled when running in isolated environments:
 
 ```bash
 cargo check -p edr_deno
