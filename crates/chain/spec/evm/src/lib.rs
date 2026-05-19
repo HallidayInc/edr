@@ -67,6 +67,7 @@ pub trait EvmChainSpec:
         transaction: Self::SignedTransaction,
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -81,6 +82,7 @@ pub trait EvmChainSpec:
             database,
             precompile_provider,
             NoOpInspector,
+            mirror_config,
         )
     }
 
@@ -102,6 +104,7 @@ pub trait EvmChainSpec:
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<

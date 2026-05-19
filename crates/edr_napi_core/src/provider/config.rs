@@ -111,41 +111,7 @@ where
 
         let network = match value.network {
             NetworkConfig::Fork(fork_config) => {
-                let chain_overrides = fork_config
-                    .chain_overrides
-                    .into_iter()
-                    .map(|(chain_id, chain_config)| {
-                        let hardfork_activation_overrides = chain_config
-                            .hardfork_activation_overrides
-                            .map(|overrides| {
-                                overrides
-                                    .into_inner()
-                                    .into_iter()
-                                    .map(
-                                        |HardforkActivation {
-                                             condition,
-                                             hardfork,
-                                         }| {
-                                            let hardfork = parse_hardfork(hardfork)?;
-
-                                            Ok(HardforkActivation {
-                                                condition,
-                                                hardfork,
-                                            })
-                                        },
-                                    )
-                                    .collect::<napi::Result<_>>()
-                                    .map(HardforkActivations::new)
-                            })
-                            .transpose()?;
-
-                        let chain_config = ChainOverride {
-                            name: chain_config.name,
-                            hardfork_activation_overrides,
-                        };
-                        Ok((chain_id, chain_config))
-                    })
-                    .collect::<napi::Result<_>>()?;
+                let chain_overrides = parse_chain_overrides(fork_config.chain_overrides)?;
 
                 ForkConfig {
                     block_number: fork_config.block_number,
@@ -172,6 +138,7 @@ where
             bail_on_call_failure: value.bail_on_call_failure,
             bail_on_transaction_failure: value.bail_on_transaction_failure,
             base_fee_params,
+            chain_overrides: HashMap::default(),
             default_transaction_gas_limit: value.default_transaction_gas_limit,
             chain_id: value.chain_id,
             coinbase: value.coinbase,
@@ -190,4 +157,44 @@ where
             transaction_gas_cap,
         })
     }
+}
+
+fn parse_chain_overrides<HardforkT: FromStr<Err = UnknownHardfork> + Default + Into<EvmSpecId>>(
+    chain_overrides: HashMap<ChainId, ChainOverride<String>>,
+) -> napi::Result<HashMap<ChainId, ChainOverride<HardforkT>>> {
+    chain_overrides
+        .into_iter()
+        .map(|(chain_id, chain_config)| {
+            let hardfork_activation_overrides = chain_config
+                .hardfork_activation_overrides
+                .map(|overrides| {
+                    overrides
+                        .into_inner()
+                        .into_iter()
+                        .map(
+                            |HardforkActivation {
+                                 condition,
+                                 hardfork,
+                             }| {
+                                let hardfork = parse_hardfork(hardfork)?;
+
+                                Ok(HardforkActivation {
+                                    condition,
+                                    hardfork,
+                                })
+                            },
+                        )
+                        .collect::<napi::Result<_>>()
+                        .map(HardforkActivations::new)
+                })
+                .transpose()?;
+
+            let chain_config = ChainOverride {
+                name: chain_config.name,
+                hardfork_activation_overrides,
+                native_token_mirror: chain_config.native_token_mirror,
+            };
+            Ok((chain_id, chain_config))
+        })
+        .collect()
 }

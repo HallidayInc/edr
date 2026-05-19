@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 edr_blockchain_api.workspace = true
+edr_chain_config.workspace = true
+edr_mirror.workspace = true
 edr_primitives.workspace = true
 edr_state_api.workspace = true
 revm-database-interface.workspace = true

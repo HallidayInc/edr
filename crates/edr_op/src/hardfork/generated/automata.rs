@@ -49,5 +49,6 @@ pub(super) fn mainnet_config() -> ChainConfig<OpSpecId> {
             },
         ]),
         bpo_hardfork_schedule: None,
+        native_token_mirror: None,
     }
 }

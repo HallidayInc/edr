@@ -4,6 +4,7 @@ use std::fmt::Debug;
 
 use edr_block_header::{BlockConfig, BlockHeader, HeaderOverrides, PartialHeader, Withdrawal};
 pub use edr_blockchain_api::Blockchain;
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::{
     BlockEnvChainSpec, ChainSpec, EvmSpecId, HaltReasonTrait, HardforkChainSpec,
     TransactionValidation,
@@ -156,6 +157,7 @@ pub trait BlockBuilder<
         inputs: BlockInputs,
         overrides: HeaderOverrides<ChainSpecT::Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationErrorForChainSpec<
