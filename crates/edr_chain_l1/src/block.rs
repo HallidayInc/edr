@@ -76,6 +76,7 @@ pub struct EthBlockBuilder<
     transaction_results: Vec<ExecutionResult<EvmChainSpecT::HaltReason>>,
     withdrawals: Option<Vec<Withdrawal>>,
     custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     // Set of all unique precompile addresses. We collect this once during construction as their
     // creation should be deterministic.
     precompile_addresses: HashSet<Address>,
@@ -278,6 +279,7 @@ impl<
         inputs: BlockInputs,
         mut overrides: HeaderOverrides<ChainSpecT::Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationError<
@@ -359,6 +361,7 @@ impl<
             transaction_results: Vec::new(),
             withdrawals: inputs.withdrawals,
             custom_precompiles,
+            native_token_mirror,
             precompile_addresses,
             _phantom: PhantomData,
         })
@@ -400,13 +403,14 @@ impl<
             transaction.clone(),
             block_env,
             self.custom_precompiles,
+            self.native_token_mirror,
         )?;
 
         self.add_transaction_result(
             receipt_builder,
             transaction,
             transaction_result.into_result_and_state(),
-        );
+        )?;
 
         Ok(())
     }
@@ -468,6 +472,7 @@ impl<
             transaction.clone(),
             block_env,
             self.custom_precompiles,
+            self.native_token_mirror,
             extension,
         )
         .map_err(BlockTransactionError::from)?;
@@ -476,24 +481,45 @@ impl<
             receipt_builder,
             transaction,
             transaction_result.into_result_and_state(),
-        );
+        )?;
 
         Ok(())
     }
+
     fn add_transaction_result(
         &mut self,
         receipt_builder: ExecutionReceiptBuilderT,
         transaction: ChainSpecT::SignedTransaction,
         transaction_result: ExecutionResultAndState<ChainSpecT::HaltReason>,
-    ) {
+    ) -> Result<
+        (),
+        BlockTransactionErrorForChainSpec<
+            ChainSpecT,
+            DatabaseComponentError<BlockchainErrorT, StateError>,
+        >,
+    > {
         let ExecutionResultAndState {
             result: transaction_result,
-            state: state_diff,
+            state,
         } = transaction_result;
+        let mut state_diff = StateDiff::from(state);
 
-        self.state_diff.apply_diff(state_diff.clone());
+        if let Some(native_token_mirror) = self.native_token_mirror {
+            edr_mirror::apply_native_token_mirror_state_diff(
+                native_token_mirror,
+                &mut state_diff,
+                self.state.as_mut(),
+            )
+            .map_err(|error| {
+                BlockTransactionError::Transaction(TransactionError::Database(
+                    DatabaseComponentError::State(error),
+                ))
+            })?;
+        }
 
-        self.state.commit(state_diff);
+        self.state_diff.apply_diff(state_diff.clone().into());
+
+        self.state.commit(state_diff.into());
 
         self.header.gas_used += transaction_result.gas_used();
 
@@ -520,6 +546,8 @@ impl<
 
         self.transactions.push(transaction);
         self.transaction_results.push(transaction_result);
+
+        Ok(())
     }
 }
 
@@ -592,6 +620,15 @@ impl<
 
                 self.state_diff.apply_account_change(address, account_info);
             }
+        }
+
+        if let Some(native_token_mirror) = self.native_token_mirror {
+            edr_mirror::apply_native_token_mirror_state_diff(
+                native_token_mirror,
+                &mut self.state_diff,
+                self.state.as_mut(),
+            )
+            .map_err(BlockFinalizeError::State)?;
         }
 
         if let Some(gas_limit) = self.parent_gas_limit {
@@ -725,6 +762,7 @@ impl<
         inputs: BlockInputs,
         overrides: HeaderOverrides<ChainSpecT::Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationError<
@@ -741,6 +779,7 @@ impl<
             inputs,
             overrides,
             custom_precompiles,
+            native_token_mirror,
         )
     }
 

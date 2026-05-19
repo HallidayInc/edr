@@ -9,6 +9,7 @@ pub use edr_block_builder_api::{BuiltBlockAndState, BuiltBlockAndStateWithMetada
 use edr_block_header::{
     calculate_next_base_fee_per_blob_gas, BlockConfig, HeaderOverrides, PartialHeader,
 };
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::{
     ChainSpec, EvmTransactionValidationError, ExecutableTransaction, HaltReasonTrait,
     HardforkChainSpec, TransactionValidation,
@@ -19,6 +20,7 @@ use edr_chain_spec_evm::{
 };
 use edr_database_components::DatabaseComponents;
 use edr_mem_pool::{MemPool, OrderedTransaction};
+use edr_mirror::native_token_mirror_account_info;
 use edr_primitives::{Address, HashMap, HashSet, B256};
 use edr_signer::SignatureError;
 use edr_state_api::{DynState, StateError};
@@ -208,6 +210,7 @@ pub fn mine_block<ChainSpecT, BlockchainErrorT, InspectorT>(
     reward: u128,
     mut inspector: Option<&mut InspectorT>,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
 ) -> Result<
     MineBlockResultAndStateWithMetadata<
         ChainSpecT::LocalBlock,
@@ -254,6 +257,7 @@ where
         block_inputs,
         overrides,
         custom_precompiles,
+        native_token_mirror,
     )?;
 
     let mut pending_transactions = {
@@ -481,6 +485,7 @@ pub fn mine_block_with_single_transaction<
     reward: u128,
     inspector: Option<&mut InspectorT>,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&NativeTokenMirror>,
 ) -> Result<
     BuiltBlockAndStateWithMetadata<ChainSpecT::LocalBlock, ChainSpecT::HaltReason>,
     MineTransactionErrorForChainSpec<ChainSpecT, BlockchainErrorT>,
@@ -556,10 +561,16 @@ where
         }
     }
 
-    let sender = state
-        .basic(*transaction.caller())
-        .map_err(MineTransactionError::State)?
-        .unwrap_or_default();
+    let sender = if let Some(native_token_mirror) = native_token_mirror {
+        native_token_mirror_account_info(&*state, native_token_mirror, *transaction.caller())
+            .map_err(MineTransactionError::State)?
+            .unwrap_or_default()
+    } else {
+        state
+            .basic(*transaction.caller())
+            .map_err(MineTransactionError::State)?
+            .unwrap_or_default()
+    };
 
     // TODO: This is also checked by `revm`, so it can be simplified
     match transaction.nonce().cmp(&sender.nonce) {
@@ -586,6 +597,7 @@ where
         BlockInputs::empty(hardfork),
         overrides,
         custom_precompiles,
+        native_token_mirror,
     )?;
 
     let beneficiary = block_builder.header().beneficiary;

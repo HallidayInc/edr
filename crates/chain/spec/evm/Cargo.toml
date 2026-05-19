@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+edr_chain_config.workspace = true
 edr_chain_spec.workspace = true
 edr_database_components.workspace = true
 edr_primitives.workspace = true

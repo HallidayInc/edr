@@ -21,6 +21,7 @@ pub struct Config {
     pub bail_on_transaction_failure: bool,
     pub base_fee_params: Option<Vec<(BaseFeeActivation<String>, ConstantBaseFeeParams)>>,
     pub block_gas_limit: NonZeroU64,
+    pub chain_overrides: HashMap<ChainId, ChainOverride<String>>,
     pub chain_id: ChainId,
     pub coinbase: Address,
     pub fork: Option<ForkConfig<String>>,
@@ -90,49 +91,14 @@ where
             .transpose()?
             .map(|activation| BaseFeeParams::Dynamic(DynamicBaseFeeParams::new(activation)));
 
+        let chain_overrides = parse_chain_overrides(value.chain_overrides)?;
         let fork = value
             .fork
             .map(|fork| -> napi::Result<ForkConfig<HardforkT>> {
-                let chain_overrides = fork
-                    .chain_overrides
-                    .into_iter()
-                    .map(|(chain_id, chain_config)| {
-                        let hardfork_activation_overrides = chain_config
-                            .hardfork_activation_overrides
-                            .map(|overrides| {
-                                overrides
-                                    .into_inner()
-                                    .into_iter()
-                                    .map(
-                                        |HardforkActivation {
-                                             condition,
-                                             hardfork,
-                                         }| {
-                                            let hardfork = parse_hardfork(hardfork)?;
-
-                                            Ok(HardforkActivation {
-                                                condition,
-                                                hardfork,
-                                            })
-                                        },
-                                    )
-                                    .collect::<napi::Result<_>>()
-                                    .map(HardforkActivations::new)
-                            })
-                            .transpose()?;
-
-                        let chain_config = ChainOverride {
-                            name: chain_config.name,
-                            hardfork_activation_overrides,
-                        };
-                        Ok((chain_id, chain_config))
-                    })
-                    .collect::<napi::Result<_>>()?;
-
                 Ok(edr_provider::ForkConfig {
                     block_number: fork.block_number,
                     cache_dir: fork.cache_dir,
-                    chain_overrides,
+                    chain_overrides: parse_chain_overrides(fork.chain_overrides)?,
                     http_headers: fork.http_headers,
                     url: fork.url,
                 })
@@ -148,6 +114,7 @@ where
             bail_on_transaction_failure: value.bail_on_transaction_failure,
             base_fee_params,
             block_gas_limit: value.block_gas_limit,
+            chain_overrides,
             chain_id: value.chain_id,
             coinbase: value.coinbase,
             fork,
@@ -166,4 +133,44 @@ where
             transaction_gas_cap: value.transaction_gas_cap,
         })
     }
+}
+
+fn parse_chain_overrides<HardforkT: FromStr<Err = UnknownHardfork> + Default + Into<EvmSpecId>>(
+    chain_overrides: HashMap<ChainId, ChainOverride<String>>,
+) -> napi::Result<HashMap<ChainId, ChainOverride<HardforkT>>> {
+    chain_overrides
+        .into_iter()
+        .map(|(chain_id, chain_config)| {
+            let hardfork_activation_overrides = chain_config
+                .hardfork_activation_overrides
+                .map(|overrides| {
+                    overrides
+                        .into_inner()
+                        .into_iter()
+                        .map(
+                            |HardforkActivation {
+                                 condition,
+                                 hardfork,
+                             }| {
+                                let hardfork = parse_hardfork(hardfork)?;
+
+                                Ok(HardforkActivation {
+                                    condition,
+                                    hardfork,
+                                })
+                            },
+                        )
+                        .collect::<napi::Result<_>>()
+                        .map(HardforkActivations::new)
+                })
+                .transpose()?;
+
+            let chain_config = ChainOverride {
+                name: chain_config.name,
+                hardfork_activation_overrides,
+                native_token_mirror: chain_config.native_token_mirror,
+            };
+            Ok((chain_id, chain_config))
+        })
+        .collect()
 }

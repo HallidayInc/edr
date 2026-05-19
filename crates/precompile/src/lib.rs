@@ -4,7 +4,7 @@
 use std::marker::PhantomData;
 
 use edr_primitives::{Address, Bytes, HashMap, HashSet};
-use revm_context_interface::{Cfg, ContextTr as ContextTrait, JournalTr as _, LocalContextTr as _};
+use revm_context_interface::{Cfg, ContextTr as ContextTrait, LocalContextTr as _};
 pub use revm_handler::{EthPrecompiles, PrecompileProvider};
 use revm_interpreter::{CallInput, CallInputs, Gas, InstructionResult, InterpreterResult};
 pub use revm_precompile::{
@@ -42,11 +42,7 @@ impl<
         base: BaseProviderT,
         custom_precompiles: HashMap<Address, PrecompileFn>,
     ) -> Self {
-        let unique_addresses = custom_precompiles
-            .keys()
-            .cloned()
-            .chain(base.warm_addresses())
-            .collect();
+        let unique_addresses = unique_addresses(&base, &custom_precompiles);
 
         Self {
             base,
@@ -79,13 +75,7 @@ impl<
     fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
         let changed = self.base.set_spec(spec);
         if changed {
-            // Update unique addresses
-            self.unique_addresses = self
-                .custom_precompiles
-                .keys()
-                .cloned()
-                .chain(self.base.warm_addresses())
-                .collect();
+            self.unique_addresses = unique_addresses(&self.base, &self.custom_precompiles);
         }
 
         changed
@@ -140,27 +130,34 @@ impl<
                 } else {
                     InstructionResult::PrecompileError
                 };
-                // If this is a top-level precompile call (depth == 1), persist the error
-                // message into the local context so it can be returned as
-                // output in the final result. Only do this for non-OOG errors
-                // (OOG is a distinct halt reason without output).
-                if !e.is_oog() && context.journal().depth() == 1 {
-                    context
-                        .local_mut()
-                        .set_precompile_error_context(e.to_string());
-                }
             }
         }
+
         Ok(Some(result))
     }
 
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(self.unique_addresses.iter().cloned())
+        Box::new(self.unique_addresses.iter().copied())
     }
 
     fn contains(&self, address: &Address) -> bool {
         self.unique_addresses.contains(address)
     }
+}
+
+fn unique_addresses<BaseProviderT, ContextT>(
+    base: &BaseProviderT,
+    custom_precompiles: &HashMap<Address, PrecompileFn>,
+) -> HashSet<Address>
+where
+    BaseProviderT: PrecompileProvider<ContextT, Output = InterpreterResult>,
+    ContextT: ContextTrait,
+{
+    custom_precompiles
+        .keys()
+        .cloned()
+        .chain(base.warm_addresses())
+        .collect()
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ fn get_provider<
     let chain_override = ChainOverride {
         name: "Arbitrum".to_owned(),
         hardfork_activation_overrides: Some(HardforkActivations::with_spec_id(hardfork)),
+        native_token_mirror: None,
     };
     let url = json_rpc_url_provider::arbitrum_mainnet();
     // THIS CALL IS UNSAFE AND MIGHT LEAD TO UNDEFINED BEHAVIOR. WE DEEM THE RISK

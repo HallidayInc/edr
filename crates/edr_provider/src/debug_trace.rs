@@ -62,6 +62,7 @@ pub fn debug_trace_transaction<'header, ChainSpecT: BlockChainSpec<SignedTransac
                 transaction.clone(),
                 &block,
                 &HashMap::default(),
+                None,
                 &mut DualInspector::new(&mut debug_inspector, &mut evm_observer),
             )?;
 
@@ -73,6 +74,7 @@ pub fn debug_trace_transaction<'header, ChainSpecT: BlockChainSpec<SignedTransac
 
             let mut database = WrapDatabaseRef(DatabaseComponents {
                 blockchain,
+                native_token_mirror: None,
                 state: state.as_ref(),
             });
 

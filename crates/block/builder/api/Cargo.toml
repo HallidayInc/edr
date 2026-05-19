@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 edr_block_header.workspace = true
 edr_blockchain_api.workspace = true
+edr_chain_config.workspace = true
 edr_chain_spec.workspace = true
 edr_chain_spec_evm.workspace = true
 edr_database_components.workspace = true

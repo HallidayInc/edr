@@ -3,6 +3,7 @@ use core::cmp;
 use edr_block_api::{Block as _, FetchBlockReceipts};
 use edr_block_header::BlockHeader;
 use edr_blockchain_api::{r#dyn::DynBlockchainError, BlockHashByNumber};
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_spec::{BlockEnvConstructor as _, ExecutableTransaction as _};
 use edr_chain_spec_evm::{result::ExecutionResult, CfgEnv};
 use edr_chain_spec_provider::ProviderChainSpec;
@@ -30,6 +31,7 @@ pub(super) struct CheckGasLimitArgs<'a, HardforkT, SignedTransactionT> {
     pub transaction: SignedTransactionT,
     pub gas_limit: u64,
     pub custom_precompiles: &'a HashMap<Address, PrecompileFn>,
+    pub native_token_mirror: Option<&'a NativeTokenMirror>,
     pub observer: &'a mut EvmObserver,
     pub scheduled_blob_params: Option<&'a ScheduledBlobParams>,
 }
@@ -53,6 +55,7 @@ pub(super) fn check_gas_limit<ChainSpecT: ProviderChainSpec<SignedTransaction: T
         mut transaction,
         gas_limit,
         custom_precompiles,
+        native_token_mirror,
         observer,
         scheduled_blob_params,
     } = args;
@@ -68,6 +71,7 @@ pub(super) fn check_gas_limit<ChainSpecT: ProviderChainSpec<SignedTransaction: T
         cfg_env,
         transaction,
         custom_precompiles,
+        native_token_mirror,
         observer,
     )?;
 
@@ -86,6 +90,7 @@ pub(super) struct BinarySearchEstimationArgs<'a, HardforkT, SignedTransactionT> 
     pub lower_bound: u64,
     pub upper_bound: u64,
     pub custom_precompiles: &'a HashMap<Address, PrecompileFn>,
+    pub native_token_mirror: Option<&'a NativeTokenMirror>,
     pub observer_config: EvmObserverConfig,
     pub scheduled_blob_params: Option<&'a ScheduledBlobParams>,
 }
@@ -109,6 +114,7 @@ pub(super) fn binary_search_estimation<
         mut lower_bound,
         mut upper_bound,
         custom_precompiles,
+        native_token_mirror,
         observer_config,
         scheduled_blob_params,
     } = args;
@@ -139,6 +145,7 @@ pub(super) fn binary_search_estimation<
             transaction: transaction.clone(),
             gas_limit: mid,
             custom_precompiles,
+            native_token_mirror,
             observer: &mut observer,
             scheduled_blob_params,
         })?;

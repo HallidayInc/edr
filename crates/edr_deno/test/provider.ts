@@ -75,8 +75,33 @@ function encodeAddressArg(address: string) {
     return address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
 }
 
+function encodeUintArg(value: bigint) {
+    return value.toString(16).padStart(64, "0");
+}
+
 function decodeFirstWord(result: string) {
     return BigInt(`0x${result.replace(/^0x/, "").slice(0, 64) || "0"}`);
+}
+
+function addressToWordBytes(address: string) {
+    const addressBytes = hexToBytes(address);
+    const word = new Uint8Array(32);
+    word.set(addressBytes, 12);
+    return word;
+}
+
+function bigintToWordBytes(value: bigint) {
+    const word = new Uint8Array(32);
+    const hex = value.toString(16).padStart(64, "0");
+    word.set(hexToBytes(`0x${hex}`));
+    return word;
+}
+
+function mappingStorageKey(address: string, slot: bigint) {
+    const preimage = new Uint8Array(64);
+    preimage.set(addressToWordBytes(address), 0);
+    preimage.set(bigintToWordBytes(slot), 32);
+    return bytesToHex(keccak_256(preimage));
 }
 
 function decodeWord(result: string, index: number) {
@@ -641,6 +666,216 @@ Deno.test("arbitrum fork ArbInfo precompile mirrors standard account queries", a
         }, "latest"],
     });
     assertEquals(decodeBytes(actualCode).toLowerCase(), expectedCode.toLowerCase());
+});
+
+Deno.test("stable native token mirror links real ERC20 storage to native balances", async () => {
+    const token = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736";
+    const account = "0x000000000000000000000000000000000000bEEF";
+    const recipient = "0x000000000000000000000000000000000000dEaD";
+    const slot = 51n;
+    const scale = 10n ** 12n;
+    const initialBalance = 123n * 10n ** 18n + 456789n;
+    const storageWrittenBalance = 124n * 10n ** 6n;
+    const transferAmount = 10n * 10n ** 6n;
+    const nativeTransferAmount = 10n * 10n ** 18n;
+
+    using ctx = new Context();
+    using stable = ctx.createProvider({
+        chain: "generic",
+        chainId: 988n,
+        networkId: 988n,
+        hardfork: "prague",
+        fork: { jsonRpcUrl: "https://rpc.stable.xyz" },
+        nativeTokenMirror: {
+            token,
+            decimals: 6,
+            balanceSlot: slot,
+        },
+        chains: [{
+            chainId: 988n,
+            hardforks: [{ blockNumber: 0, specId: "prague" }],
+        }],
+    });
+
+    await request(stable, {
+        method: "hardhat_impersonateAccount",
+        params: [account],
+    });
+    await request(stable, {
+        method: "hardhat_setBalance",
+        params: [account, toRpcQuantity(initialBalance)],
+    });
+    await request(stable, {
+        method: "hardhat_setBalance",
+        params: [recipient, "0x0"],
+    });
+
+    const storageKey = mappingStorageKey(account, slot);
+    const balanceOfData = `${selector("balanceOf(address)")}${encodeAddressArg(account)}`;
+    const initialMirrored = await request(stable, {
+        method: "eth_call",
+        params: [{ to: token, data: balanceOfData }, "latest"],
+    });
+    assertEquals(decodeFirstWord(initialMirrored), initialBalance / scale);
+
+    await request(stable, {
+        method: "hardhat_setStorageAt",
+        params: [token, storageKey, `0x${encodeUintArg(storageWrittenBalance)}`],
+    });
+    const writtenStorage = await request(stable, {
+        method: "eth_getStorageAt",
+        params: [token, storageKey, "latest"],
+    });
+    assertEquals(decodeFirstWord(writtenStorage), storageWrittenBalance);
+
+    const storageMirrored = await request(stable, {
+        method: "eth_call",
+        params: [{ to: token, data: balanceOfData }, "latest"],
+    });
+    assertEquals(decodeFirstWord(storageMirrored), storageWrittenBalance);
+
+    const storageNativeBalance = await request(stable, {
+        method: "eth_getBalance",
+        params: [account, "latest"],
+    });
+    assertEquals(
+        BigInt(storageNativeBalance),
+        storageWrittenBalance * scale + initialBalance % scale,
+    );
+
+    const decimals = await request(stable, {
+        method: "eth_call",
+        params: [{ to: token, data: selector("decimals()") }, "latest"],
+    });
+    assertEquals(decodeFirstWord(decimals), 6n);
+
+    const accountNativeBeforeTransfer = BigInt(await request(stable, {
+        method: "eth_getBalance",
+        params: [account, "latest"],
+    }));
+    const recipientNativeBeforeTransfer = BigInt(await request(stable, {
+        method: "eth_getBalance",
+        params: [recipient, "latest"],
+    }));
+    const recipientMirroredBeforeTransfer = await request(stable, {
+        method: "eth_call",
+        params: [{
+            to: token,
+            data: `${selector("balanceOf(address)")}${encodeAddressArg(recipient)}`,
+        }, "latest"],
+    });
+
+    const transferHash = await request(stable, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: account,
+            to: token,
+            data: `${selector("transfer(address,uint256)")}${encodeAddressArg(recipient)}${encodeUintArg(transferAmount)}`,
+            gas: "0x186a0",
+        }],
+    });
+    const transferReceipt = await request(stable, {
+        method: "eth_getTransactionReceipt",
+        params: [transferHash],
+    });
+    const gasCost = BigInt(transferReceipt.gasUsed) * BigInt(transferReceipt.effectiveGasPrice);
+
+    const accountNativeBalance = await request(stable, {
+        method: "eth_getBalance",
+        params: [account, "latest"],
+    });
+    assertEquals(
+        BigInt(accountNativeBalance),
+        accountNativeBeforeTransfer - nativeTransferAmount - gasCost,
+    );
+
+    const recipientNativeBalance = await request(stable, {
+        method: "eth_getBalance",
+        params: [recipient, "latest"],
+    });
+    assertEquals(
+        BigInt(recipientNativeBalance),
+        recipientNativeBeforeTransfer + nativeTransferAmount,
+    );
+
+    const recipientMirrored = await request(stable, {
+        method: "eth_call",
+        params: [{
+            to: token,
+            data: `${selector("balanceOf(address)")}${encodeAddressArg(recipient)}`,
+        }, "latest"],
+    });
+    assertEquals(
+        decodeFirstWord(recipientMirrored),
+        decodeFirstWord(recipientMirroredBeforeTransfer) + transferAmount,
+    );
+});
+
+Deno.test("stable native token mirror lets storage-funded account spend native balance", async () => {
+    const token = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736";
+    const account = "0x000000000000000000000000000000000000c0De";
+    const recipient = "0x000000000000000000000000000000000000dEaD";
+    const slot = 51n;
+    const scale = 10n ** 12n;
+    const storageBalance = 100n * 10n ** 6n;
+    const nativeTransferAmount = 1n * 10n ** 18n;
+
+    using ctx = new Context();
+    using stable = ctx.createProvider({
+        chain: "generic",
+        chainId: 988n,
+        networkId: 988n,
+        hardfork: "prague",
+        fork: { jsonRpcUrl: "https://rpc.stable.xyz" },
+        nativeTokenMirror: {
+            token,
+            decimals: 6,
+            balanceSlot: slot,
+        },
+        chains: [{
+            chainId: 988n,
+            hardforks: [{ blockNumber: 0, specId: "prague" }],
+        }],
+    });
+
+    await request(stable, {
+        method: "hardhat_impersonateAccount",
+        params: [account],
+    });
+    await request(stable, {
+        method: "hardhat_setStorageAt",
+        params: [token, mappingStorageKey(account, slot), `0x${encodeUintArg(storageBalance)}`],
+    });
+
+    const mirroredNativeBalance = await request(stable, {
+        method: "eth_getBalance",
+        params: [account, "latest"],
+    });
+    assertEquals(BigInt(mirroredNativeBalance), storageBalance * scale);
+
+    const recipientNativeBalanceBefore = await request(stable, {
+        method: "eth_getBalance",
+        params: [recipient, "latest"],
+    });
+
+    await request(stable, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: account,
+            to: recipient,
+            value: toRpcQuantity(nativeTransferAmount),
+            gas: "0x5208",
+        }],
+    });
+
+    const recipientNativeBalance = await request(stable, {
+        method: "eth_getBalance",
+        params: [recipient, "latest"],
+    });
+    assertEquals(
+        BigInt(recipientNativeBalance) - BigInt(recipientNativeBalanceBefore),
+        nativeTransferAmount,
+    );
 });
 
 Deno.test("local arbitrum ArbOwnerPublic compatibility calls succeed", async () => {

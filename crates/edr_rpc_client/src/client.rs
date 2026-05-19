@@ -130,7 +130,6 @@ pub trait RpcMethod {
     /// This is used for caching purposes.
     fn chain_id_request() -> Self;
 
-    #[cfg(feature = "tracing")]
     /// Returns the name of the method.
     fn name(&self) -> &'static str;
 }
@@ -828,7 +827,6 @@ mod tests {
             Self::ChainId(())
         }
 
-        #[cfg(feature = "tracing")]
         fn name(&self) -> &'static str {
             match self {
                 Self::BlockNumber(_) => "eth_blockNumber",
