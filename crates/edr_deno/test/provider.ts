@@ -75,8 +75,33 @@ function encodeAddressArg(address: string) {
     return address.toLowerCase().replace(/^0x/, "").padStart(64, "0");
 }
 
+function encodeUintArg(value: bigint) {
+    return value.toString(16).padStart(64, "0");
+}
+
 function decodeFirstWord(result: string) {
     return BigInt(`0x${result.replace(/^0x/, "").slice(0, 64) || "0"}`);
+}
+
+function addressToWordBytes(address: string) {
+    const addressBytes = hexToBytes(address);
+    const word = new Uint8Array(32);
+    word.set(addressBytes, 12);
+    return word;
+}
+
+function bigintToWordBytes(value: bigint) {
+    const word = new Uint8Array(32);
+    const hex = value.toString(16).padStart(64, "0");
+    word.set(hexToBytes(`0x${hex}`));
+    return word;
+}
+
+function mappingStorageKey(address: string, slot: bigint) {
+    const preimage = new Uint8Array(64);
+    preimage.set(addressToWordBytes(address), 0);
+    preimage.set(bigintToWordBytes(slot), 32);
+    return bytesToHex(keccak_256(preimage));
 }
 
 function decodeWord(result: string, index: number) {
@@ -641,6 +666,92 @@ Deno.test("arbitrum fork ArbInfo precompile mirrors standard account queries", a
         }, "latest"],
     });
     assertEquals(decodeBytes(actualCode).toLowerCase(), expectedCode.toLowerCase());
+});
+
+Deno.test("native token mirror exposes an ERC20 facade over native balances", async () => {
+    const token = "0x1000000000000000000000000000000000000000";
+    const account = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
+    const recipient = "0x000000000000000000000000000000000000dEaD";
+    const slot = 3n;
+    const initialBalance = 123n * 10n ** 18n;
+    const mirroredByNativeWrite = 789n * 10n ** 18n;
+    const transferAmount = 10n * 10n ** 6n;
+
+    using ctx = new Context();
+    using arb = ctx.createProvider({
+        chain: "arb",
+        chainId: 42161n,
+        networkId: 42161n,
+        hardfork: "cancun",
+        nativeTokenMirror: {
+            token,
+            decimals: 6,
+            balanceSlot: slot,
+        },
+        chains: [{
+            chainId: 42161n,
+            hardforks: [{ blockNumber: 0, specId: "cancun" }],
+        }],
+        ownedAccounts: [{
+            secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+            balance: initialBalance,
+        }],
+    });
+
+    const balanceOfData = `${selector("balanceOf(address)")}${encodeAddressArg(account)}`;
+    const initialMirrored = await request(arb, {
+        method: "eth_call",
+        params: [{ to: token, data: balanceOfData }, "latest"],
+    });
+    assertEquals(decodeFirstWord(initialMirrored), 123n * 10n ** 6n);
+
+    const decimals = await request(arb, {
+        method: "eth_call",
+        params: [{ to: token, data: selector("decimals()") }, "latest"],
+    });
+    assertEquals(decodeFirstWord(decimals), 6n);
+
+    await request(arb, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: account,
+            to: token,
+            data: `${selector("transfer(address,uint256)")}${encodeAddressArg(recipient)}${encodeUintArg(transferAmount)}`,
+            gas: "0x186a0",
+        }],
+    });
+
+    const recipientNativeBalance = await request(arb, {
+        method: "eth_getBalance",
+        params: [recipient, "latest"],
+    });
+    assertEquals(BigInt(recipientNativeBalance), 10n * 10n ** 18n);
+
+    const recipientMirrored = await request(arb, {
+        method: "eth_call",
+        params: [{
+            to: token,
+            data: `${selector("balanceOf(address)")}${encodeAddressArg(recipient)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(recipientMirrored), transferAmount);
+
+    await request(arb, {
+        method: "hardhat_setBalance",
+        params: [account, toRpcQuantity(mirroredByNativeWrite)],
+    });
+    const mirroredAfterNativeWrite = await request(arb, {
+        method: "eth_call",
+        params: [{ to: token, data: balanceOfData }, "latest"],
+    });
+    assertEquals(decodeFirstWord(mirroredAfterNativeWrite), 789n * 10n ** 6n);
+
+    const storageKey = mappingStorageKey(account, slot);
+    const mirroredStorageAfterNativeWrite = await request(arb, {
+        method: "eth_getStorageAt",
+        params: [token, storageKey, "latest"],
+    });
+    assertEquals(decodeFirstWord(mirroredStorageAfterNativeWrite), 789n * 10n ** 6n);
 });
 
 Deno.test("local arbitrum ArbOwnerPublic compatibility calls succeed", async () => {

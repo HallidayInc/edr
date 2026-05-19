@@ -6,6 +6,7 @@ use edr_block_builder_api::{
     WrapDatabaseRef,
 };
 use edr_block_header::{overridden_block_number, BlockConfig, HeaderOverrides, PartialHeader};
+use edr_chain_config::NativeTokenMirror;
 use edr_chain_l1::block::EthBlockBuilder;
 use edr_chain_spec::TransactionValidation;
 use edr_chain_spec_block::BlockChainSpec;
@@ -64,6 +65,7 @@ impl<'builder, BlockchainErrorT: std::error::Error>
         mut inputs: BlockInputs,
         mut overrides: HeaderOverrides<Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationError<
@@ -169,6 +171,7 @@ impl<'builder, BlockchainErrorT: std::error::Error>
             inputs,
             overrides,
             custom_precompiles,
+            native_token_mirror,
         )?;
 
         Ok(Self { eth })
@@ -277,21 +280,18 @@ pub fn decode_base_params(extra_data: &Bytes) -> Option<ConstantBaseFeeParams> {
                 return None;
             }
 
-            let denominator_bytes: [u8; 4] = extra_data
-                .get(1..=4)?
-                .try_into()
-                .ok()?;
+            let denominator_bytes: [u8; 4] = extra_data.get(1..=4)?.try_into().ok()?;
 
-            let elasticity_bytes: [u8; 4] = extra_data
-                .get(5..=8)?
-                .try_into()
-                .ok()?;
+            let elasticity_bytes: [u8; 4] = extra_data.get(5..=8)?.try_into().ok()?;
 
             let max_change_denominator = u32::from_be_bytes(denominator_bytes).into();
             let elasticity_multiplier = u32::from_be_bytes(elasticity_bytes).into();
-            Some(ConstantBaseFeeParams{max_change_denominator, elasticity_multiplier})
+            Some(ConstantBaseFeeParams {
+                max_change_denominator,
+                elasticity_multiplier,
+            })
         }
-        _ => None
+        _ => None,
     }
 }
 

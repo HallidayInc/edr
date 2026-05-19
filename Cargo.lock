@@ -2399,6 +2399,7 @@ version = "0.3.8"
 dependencies = [
  "edr_block_header",
  "edr_blockchain_api",
+ "edr_chain_config",
  "edr_chain_spec",
  "edr_chain_spec_evm",
  "edr_database_components",
@@ -2455,6 +2456,7 @@ dependencies = [
  "edr_block_api",
  "edr_block_builder_api",
  "edr_block_header",
+ "edr_chain_config",
  "edr_chain_spec",
  "edr_chain_spec_block",
  "edr_chain_spec_evm",
@@ -2619,6 +2621,7 @@ version = "0.3.8"
 dependencies = [
  "edr_eip1559",
  "edr_eip7892",
+ "edr_primitives",
  "serde",
 ]
 
@@ -2921,6 +2924,7 @@ name = "edr_evm"
 version = "0.3.8"
 dependencies = [
  "edr_blockchain_api",
+ "edr_chain_config",
  "edr_chain_spec",
  "edr_chain_spec_evm",
  "edr_database_components",
@@ -3213,6 +3217,8 @@ dependencies = [
 name = "edr_precompile"
 version = "0.3.8"
 dependencies = [
+ "alloy-primitives",
+ "edr_chain_config",
  "edr_primitives",
  "revm-context-interface",
  "revm-handler",

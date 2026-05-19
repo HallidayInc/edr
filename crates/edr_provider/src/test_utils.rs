@@ -210,6 +210,7 @@ pub fn create_test_config_with<HardforkT: Default>(
         base_fee_params: None,
         // SAFETY: literal is non-zero
         block_gas_limit: unsafe { NonZeroU64::new_unchecked(30_000_000) },
+        chain_overrides: HashMap::default(),
         chain_id: 123,
         coinbase: Address::from(U160::from(1)),
         fork: config.fork,

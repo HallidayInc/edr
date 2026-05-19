@@ -119,6 +119,7 @@ pub struct Provider<HardforkT> {
     pub bail_on_transaction_failure: bool,
     pub base_fee_params: Option<BaseFeeParams<HardforkT>>,
     pub block_gas_limit: NonZeroU64,
+    pub chain_overrides: HashMap<ChainId, ChainOverride<HardforkT>>,
     pub chain_id: ChainId,
     pub coinbase: Address,
     pub fork: Option<Fork<HardforkT>>,

@@ -76,6 +76,7 @@ pub struct EthBlockBuilder<
     transaction_results: Vec<ExecutionResult<EvmChainSpecT::HaltReason>>,
     withdrawals: Option<Vec<Withdrawal>>,
     custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+    native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     // Set of all unique precompile addresses. We collect this once during construction as their
     // creation should be deterministic.
     precompile_addresses: HashSet<Address>,
@@ -278,6 +279,7 @@ impl<
         inputs: BlockInputs,
         mut overrides: HeaderOverrides<ChainSpecT::Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationError<
@@ -337,9 +339,10 @@ impl<
                         >,
                     >,
                 >,
-            > = OverriddenPrecompileProvider::with_precompiles(
+            > = OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
                 ChainSpecT::PrecompileProvider::default(),
                 custom_precompiles.clone(),
+                native_token_mirror.cloned(),
             );
             precompile_provider.set_spec(hardfork);
             precompile_provider.into_addresses()
@@ -359,6 +362,7 @@ impl<
             transaction_results: Vec::new(),
             withdrawals: inputs.withdrawals,
             custom_precompiles,
+            native_token_mirror,
             precompile_addresses,
             _phantom: PhantomData,
         })
@@ -400,6 +404,7 @@ impl<
             transaction.clone(),
             block_env,
             self.custom_precompiles,
+            self.native_token_mirror,
         )?;
 
         self.add_transaction_result(
@@ -468,6 +473,7 @@ impl<
             transaction.clone(),
             block_env,
             self.custom_precompiles,
+            self.native_token_mirror,
             extension,
         )
         .map_err(BlockTransactionError::from)?;
@@ -725,6 +731,7 @@ impl<
         inputs: BlockInputs,
         overrides: HeaderOverrides<ChainSpecT::Hardfork>,
         custom_precompiles: &'builder HashMap<Address, PrecompileFn>,
+        native_token_mirror: Option<&'builder edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         Self,
         BlockBuilderCreationError<
@@ -741,6 +748,7 @@ impl<
             inputs,
             overrides,
             custom_precompiles,
+            native_token_mirror,
         )
     }
 

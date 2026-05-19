@@ -78,6 +78,18 @@ pub struct ChainOverride {
     pub name: String,
     /// If present, overrides for the chain's supported hardforks
     pub hardfork_activation_overrides: Option<Vec<HardforkActivation>>,
+    /// Optional configuration for an ERC-20 balance mirror of the native token.
+    pub native_token_mirror: Option<NativeTokenMirror>,
+}
+
+#[napi(object)]
+pub struct NativeTokenMirror {
+    /// The ERC-20 contract address whose balances mirror native token balances.
+    pub token: Uint8Array,
+    /// Optional decimal precision for the ERC-20 facade. Defaults to 18.
+    pub decimals: Option<u8>,
+    /// The storage slot of the ERC-20 balances mapping.
+    pub balance_slot: BigInt,
 }
 
 /// Configuration for a code coverage reporter.
@@ -278,6 +290,7 @@ impl TryFrom<ForkConfig> for edr_provider::ForkConfig<String> {
                              chain_id,
                              name,
                              hardfork_activation_overrides,
+                             native_token_mirror,
                          }| {
                             let hardfork_activation_overrides =
                                 hardfork_activation_overrides
@@ -313,9 +326,20 @@ impl TryFrom<ForkConfig> for edr_provider::ForkConfig<String> {
                                     })
                                     .transpose()?;
 
+                            let native_token_mirror = native_token_mirror
+                                .map(|mirror| -> napi::Result<_> {
+                                    Ok(edr_chain_config::NativeTokenMirror {
+                                        token: mirror.token.try_cast()?,
+                                        decimals: mirror.decimals,
+                                        balance_slot: mirror.balance_slot.try_cast()?,
+                                    })
+                                })
+                                .transpose()?;
+
                             let chain_config = edr_chain_config::ChainOverride {
                                 name,
                                 hardfork_activation_overrides,
+                                native_token_mirror,
                             };
 
                             let chain_id = chain_id.try_cast()?;
@@ -610,6 +634,7 @@ impl ProviderConfig {
             bail_on_transaction_failure: self.bail_on_transaction_failure,
             base_fee_params,
             block_gas_limit,
+            chain_overrides: HashMap::default(),
             chain_id: self.chain_id.try_cast()?,
             coinbase: self.coinbase.try_cast()?,
             fork: self.fork.map(TryInto::try_into).transpose()?,

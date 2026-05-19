@@ -62,6 +62,7 @@ pub fn debug_trace_transaction<'header, ChainSpecT: BlockChainSpec<SignedTransac
                 transaction.clone(),
                 &block,
                 &HashMap::default(),
+                None,
                 &mut DualInspector::new(&mut debug_inspector, &mut evm_observer),
             )?;
 
