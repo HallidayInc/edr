@@ -53,7 +53,24 @@ pub fn handle_set_storage_at<
     index: U256,
     value: U256,
 ) -> Result<bool, ProviderErrorForChainSpec<ChainSpecT>> {
+    // if this address is a native-token mirror, look up the slot in the
+    // persistent keccak cache (populated by interpreter KECCAK256 observations
+    // during prior balanceOf/transfer calls). on a match, route the write
+    // through set_balance so the underlying native balance becomes the single
+    // source of truth (otherwise SLOAD via the interpreter would return native
+    // — which we never updated — instead of the value we just wrote).
+    if let Some(mirror) = data.native_token_mirror()
+        && address == mirror.token
+    {
+        let owner = edr_mirror::current_cache()
+            .lock()
+            .unwrap()
+            .get(&index)
+            .copied();
+        if let Some(owner) = owner {
+            return handle_set_balance(data, owner, value);
+        }
+    }
     data.set_account_storage_slot(address, index, value)?;
-
     Ok(true)
 }

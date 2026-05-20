@@ -5,13 +5,18 @@
 //! balance. This is transparent for real bytecode (transfer, balanceOf,
 //! crosschainBurn, etc).
 //!
-//! Out-of-band RPC writes (e.g. `hardhat_setStorageAt`) are *not* mirrored:
-//! the RPC delivers an already-hashed storage key with no preimage, so we
-//! cannot recover the owner address to update the matching native balance.
-//! Cheat layers that want to fund a mirrored balance must call
-//! `hardhat_setBalance` instead.
+//! The KECCAK256 hook also populates a process-thread-local cache mapping
+//! `keccak(owner, balance_slot) -> owner`. RPC handlers (e.g.
+//! `hardhat_setStorageAt`) can resolve an already-hashed storage key back to
+//! the owner whenever the preimage has been observed by any prior interpreter
+//! execution on the same provider, letting cheats route mirrored writes
+//! through the native balance transparently.
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use alloy_primitives::{Address, B256, U256};
 use edr_chain_config::NativeTokenMirror;
@@ -29,18 +34,46 @@ use revm_primitives::{hardfork::SpecId, keccak256, KECCAK_EMPTY};
 
 const NATIVE_DECIMALS: u8 = 18;
 
-#[derive(Debug, Default)]
+pub type MirrorCache = Arc<Mutex<HashMap<U256, Address>>>;
+
+pub fn new_cache() -> MirrorCache {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+thread_local! {
+    static CURRENT_CACHE: RefCell<Option<MirrorCache>> = const { RefCell::new(None) };
+}
+
+/// Installs a cache for the current thread. Returns the previous cache, if any,
+/// so callers can restore it later (or drop it to clear).
+pub fn install_cache(cache: MirrorCache) -> Option<MirrorCache> {
+    CURRENT_CACHE.with(|c| c.replace(Some(cache)))
+}
+
+/// Returns the current thread's cache, or a fresh isolated one if none is
+/// installed.
+pub fn current_cache() -> MirrorCache {
+    CURRENT_CACHE
+        .with(|c| c.borrow().clone())
+        .unwrap_or_else(new_cache)
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct MirrorContext {
     pub config: Option<NativeTokenMirror>,
-    pub cache: RefCell<HashMap<U256, Address>>,
+    pub cache: MirrorCache,
 }
 
 impl MirrorContext {
     pub fn new(config: Option<NativeTokenMirror>) -> Self {
         Self {
             config,
-            cache: RefCell::new(HashMap::new()),
+            cache: current_cache(),
         }
+    }
+
+    pub fn with_cache(config: Option<NativeTokenMirror>, cache: MirrorCache) -> Self {
+        Self { config, cache }
     }
 
     pub fn decimals(&self) -> u8 {
@@ -63,7 +96,7 @@ impl MirrorContext {
         }
         let addr = Address::from_slice(addr_bytes);
         let key = U256::from_be_bytes(hash.0);
-        self.cache.borrow_mut().insert(key, addr);
+        self.cache.lock().unwrap().insert(key, addr);
     }
 
     pub fn balance_owner(&self, target: Address, slot: U256) -> Option<Address> {
@@ -71,7 +104,7 @@ impl MirrorContext {
         if target != config.token {
             return None;
         }
-        self.cache.borrow().get(&slot).copied()
+        self.cache.lock().unwrap().get(&slot).copied()
     }
 
     pub fn native_to_erc20(&self, balance: U256) -> U256 {

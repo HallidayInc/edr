@@ -26,6 +26,7 @@ edr_blockchain_local.workspace = true
 edr_chain_config.workspace = true
 edr_chain_l1.workspace = true
 edr_chain_spec.workspace = true
+edr_mirror.workspace = true
 edr_chain_spec_block.workspace = true
 edr_chain_spec_evm.workspace = true
 edr_chain_spec_provider.workspace = true
