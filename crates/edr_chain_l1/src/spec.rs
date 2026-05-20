@@ -81,7 +81,7 @@ impl ChainSpec for L1ChainSpec {
 }
 
 impl ContextChainSpec for L1ChainSpec {
-    type Context = ();
+    type Context = edr_mirror::MirrorContext;
 }
 
 impl EvmChainSpec for L1ChainSpec {
@@ -112,12 +112,12 @@ impl EvmChainSpec for L1ChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, EthInstructions::default(), precompile_provider);
+        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -153,7 +153,7 @@ impl EvmChainSpec for L1ChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -161,7 +161,7 @@ impl EvmChainSpec for L1ChainSpec {
         let mut evm = Evm::new_with_inspector(
             context,
             inspector,
-            EthInstructions::default(),
+            edr_mirror::build_instructions(),
             precompile_provider,
         );
 

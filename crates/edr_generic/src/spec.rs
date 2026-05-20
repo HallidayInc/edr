@@ -154,7 +154,7 @@ impl ChainSpec for GenericChainSpec {
 }
 
 impl ContextChainSpec for GenericChainSpec {
-    type Context = ();
+    type Context = edr_mirror::MirrorContext;
 }
 
 impl EvmChainSpec for GenericChainSpec {
@@ -186,12 +186,12 @@ impl EvmChainSpec for GenericChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, EthInstructions::default(), precompile_provider);
+        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -227,7 +227,7 @@ impl EvmChainSpec for GenericChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -235,7 +235,7 @@ impl EvmChainSpec for GenericChainSpec {
         let mut evm = Evm::new_with_inspector(
             context,
             inspector,
-            EthInstructions::default(),
+            edr_mirror::build_instructions(),
             precompile_provider,
         );
 
@@ -364,7 +364,7 @@ impl ChainSpec for ArbChainSpec {
 }
 
 impl ContextChainSpec for ArbChainSpec {
-    type Context = ();
+    type Context = edr_mirror::MirrorContext;
 }
 
 impl EvmChainSpec for ArbChainSpec {
@@ -395,12 +395,12 @@ impl EvmChainSpec for ArbChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, EthInstructions::default(), precompile_provider);
+        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -432,7 +432,7 @@ impl EvmChainSpec for ArbChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -440,7 +440,7 @@ impl EvmChainSpec for ArbChainSpec {
         let mut evm = Evm::new_with_inspector(
             context,
             inspector,
-            EthInstructions::default(),
+            edr_mirror::build_instructions(),
             precompile_provider,
         );
 
@@ -567,7 +567,7 @@ impl ChainSpec for ApeChainSpec {
 }
 
 impl ContextChainSpec for ApeChainSpec {
-    type Context = ();
+    type Context = edr_mirror::MirrorContext;
 }
 
 impl EvmChainSpec for ApeChainSpec {
@@ -598,12 +598,12 @@ impl EvmChainSpec for ApeChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, EthInstructions::default(), precompile_provider);
+        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -635,7 +635,7 @@ impl EvmChainSpec for ApeChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: (),
+            chain: edr_mirror::MirrorContext::new(None),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -643,7 +643,7 @@ impl EvmChainSpec for ApeChainSpec {
         let mut evm = Evm::new_with_inspector(
             context,
             inspector,
-            EthInstructions::default(),
+            edr_mirror::build_instructions(),
             precompile_provider,
         );
 
