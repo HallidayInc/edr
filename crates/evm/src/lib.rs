@@ -95,12 +95,10 @@ pub fn dry_run<
 > {
     let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
 
-    let mut precompile_provider =
-        OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
-            EvmChainSpecT::PrecompileProvider::default(),
-            custom_precompiles.clone(),
-            native_token_mirror.cloned(),
-        );
+    let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
+        EvmChainSpecT::PrecompileProvider::default(),
+        custom_precompiles.clone(),
+    );
 
     let result = EvmChainSpecT::dry_run(
         block,
@@ -157,12 +155,10 @@ pub fn dry_run_with_inspector<
 > {
     let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
 
-    let mut precompile_provider =
-        OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
-            EvmChainSpecT::PrecompileProvider::default(),
-            custom_precompiles.clone(),
-            native_token_mirror.cloned(),
-        );
+    let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
+        EvmChainSpecT::PrecompileProvider::default(),
+        custom_precompiles.clone(),
+    );
 
     let result = EvmChainSpecT::dry_run_with_inspector(
         block,

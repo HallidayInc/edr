@@ -14,7 +14,7 @@ use edr_chain_spec::{
 };
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{
-    handler::{EthInstructions, EthPrecompiles},
+    handler::EthPrecompiles,
     interpreter::InterpreterResult,
     BlockEnvTrait, CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
     ExecuteEvm as _, ExecutionResultAndState, InspectEvm as _, Inspector, Journal, LocalContext,

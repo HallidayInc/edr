@@ -18,7 +18,7 @@ use edr_chain_spec::{
 };
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{
-    handler::EthInstructions, CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
+    CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
     ExecuteEvm as _, ExecutionResultAndState, InspectEvm as _, Inspector, InterpreterResult,
     Journal, JournalTrait as _, LocalContext, PrecompileProvider, TransactionError,
 };

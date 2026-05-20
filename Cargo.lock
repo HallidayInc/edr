@@ -3235,8 +3235,6 @@ dependencies = [
 name = "edr_precompile"
 version = "0.3.8"
 dependencies = [
- "alloy-primitives",
- "edr_chain_config",
  "edr_primitives",
  "revm-context-interface",
  "revm-handler",

@@ -102,12 +102,6 @@ impl AsMirror for MirrorContext {
     }
 }
 
-/// Implemented by types that can report a mirror config (precompile providers).
-/// `dry_run` extracts this from the provider to populate `Context.chain`.
-pub trait HasMirrorConfig {
-    fn mirror_config(&self) -> Option<&NativeTokenMirror>;
-}
-
 pub trait MirrorHost: ContextTr {
     fn mirror(&self) -> &MirrorContext;
     fn set_native_balance(&mut self, owner: Address, value: U256);
