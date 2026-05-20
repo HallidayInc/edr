@@ -1,8 +1,18 @@
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use ansi_term::Color;
 use core::str::FromStr;
+use std::{
+    collections::HashSet,
+    num::NonZeroU64,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
+};
+
+use ansi_term::Color;
 use deno_bindgen::deno_bindgen;
 use edr_block_api::Block as _;
 use edr_chain_config::{
@@ -17,14 +27,13 @@ use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
 use edr_provider::{
     test_utils, time::CurrentTime, AccountOverride, InvalidRequestReason, Provider,
 };
-use edr_rpc_client::jsonrpc;
 use edr_rpc_client::{
     cache::{
         key::{ReadCacheKey, WriteCacheKey},
         CacheableMethod,
     },
     header::{self, HeaderValue},
-    HeaderMap, RpcClient, RpcMethod,
+    jsonrpc, HeaderMap, RpcClient, RpcMethod,
 };
 use edr_signer::{public_key_to_address, SecretKey, SignatureError};
 use edr_solidity::{artifacts::BuildInfoConfig, contract_decoder::ContractDecoder};
@@ -32,13 +41,6 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
-use std::{
-    collections::HashSet,
-    num::NonZeroU64,
-    path::PathBuf,
-    sync::atomic::{AtomicU32, Ordering},
-    sync::{Arc, Mutex},
-};
 use tokio::runtime::Runtime;
 
 const APE_ARBOWNERPUBLIC_ADDRESS: &str = "0x000000000000000000000000000000000000006b";
@@ -881,7 +883,8 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Creates a new provider within the provided context using the given JSON configuration.
+/// Creates a new provider within the provided context using the given JSON
+/// configuration.
 #[deno_bindgen]
 pub fn provider_new(
     context_id: u32,

@@ -18,9 +18,9 @@ use edr_chain_spec::{
 };
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{
-    CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
-    ExecuteEvm as _, ExecutionResultAndState, InspectEvm as _, Inspector, InterpreterResult,
-    Journal, JournalTrait as _, LocalContext, PrecompileProvider, TransactionError,
+    CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec, ExecuteEvm as _,
+    ExecutionResultAndState, InspectEvm as _, Inspector, InterpreterResult, Journal,
+    JournalTrait as _, LocalContext, PrecompileProvider, TransactionError,
 };
 use edr_chain_spec_provider::ProviderChainSpec;
 use edr_chain_spec_receipt::ReceiptChainSpec;
@@ -192,7 +192,11 @@ impl EvmChainSpec for GenericChainSpec {
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
+        let mut evm = Evm::new(
+            context,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -333,7 +337,8 @@ impl<TimerT: Clone + TimeSinceEpoch> ProviderSpec<TimerT> for GenericChainSpec {
     }
 }
 
-// ArbChainSpec implementations - identical to GenericChainSpec except for gas estimation
+// ArbChainSpec implementations - identical to GenericChainSpec except for gas
+// estimation
 impl BlockChainSpec for ArbChainSpec {
     type Block =
         dyn SyncBlock<Arc<Self::Receipt>, Self::SignedTransaction, Error = Self::FetchReceiptError>;
@@ -403,7 +408,11 @@ impl EvmChainSpec for ArbChainSpec {
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
+        let mut evm = Evm::new(
+            context,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
 
         evm.replay().map_err(TransactionError::from)
     }
@@ -608,7 +617,11 @@ impl EvmChainSpec for ApeChainSpec {
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
+        let mut evm = Evm::new(
+            context,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
 
         evm.replay().map_err(TransactionError::from)
     }

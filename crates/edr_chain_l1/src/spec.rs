@@ -14,11 +14,9 @@ use edr_chain_spec::{
 };
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{
-    handler::EthPrecompiles,
-    interpreter::InterpreterResult,
-    BlockEnvTrait, CfgEnv, Context, ContextForChainSpec, Database, Evm, EvmChainSpec,
-    ExecuteEvm as _, ExecutionResultAndState, InspectEvm as _, Inspector, Journal, LocalContext,
-    PrecompileProvider, TransactionError,
+    handler::EthPrecompiles, interpreter::InterpreterResult, BlockEnvTrait, CfgEnv, Context,
+    ContextForChainSpec, Database, Evm, EvmChainSpec, ExecuteEvm as _, ExecutionResultAndState,
+    InspectEvm as _, Inspector, Journal, LocalContext, PrecompileProvider, TransactionError,
 };
 use edr_chain_spec_provider::ProviderChainSpec;
 use edr_chain_spec_receipt::ReceiptChainSpec;
@@ -118,7 +116,11 @@ impl EvmChainSpec for L1ChainSpec {
             error: Ok(()),
         };
 
-        let mut evm = Evm::new(context, edr_mirror::build_instructions(), precompile_provider);
+        let mut evm = Evm::new(
+            context,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
 
         evm.replay().map_err(TransactionError::from)
     }

@@ -80,7 +80,8 @@ impl<HardforkT: Clone> From<&[HardforkActivation<HardforkT>]> for HardforkActiva
     }
 }
 
-/// Configuration for an ERC-20 contract whose balances mirror native token balances.
+/// Configuration for an ERC-20 contract whose balances mirror native token
+/// balances.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTokenMirror {

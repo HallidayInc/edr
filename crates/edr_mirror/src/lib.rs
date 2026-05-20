@@ -1,24 +1,18 @@
 //! Native token mirror via instruction-table hooks.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap};
 
 use alloy_primitives::{Address, B256, U256};
 use edr_chain_config::NativeTokenMirror;
-use revm_context_interface::{
-    context::ContextTr,
-    host::LoadError,
-    journaled_state::JournalTr,
-};
+use revm_context_interface::{context::ContextTr, host::LoadError, journaled_state::JournalTr};
 use revm_handler::instructions::EthInstructions;
 use revm_interpreter::{
     gas::{
-        self, CALL_STIPEND, COLD_SLOAD_COST_ADDITIONAL, ISTANBUL_SLOAD_GAS,
-        WARM_STORAGE_READ_COST,
+        self, CALL_STIPEND, COLD_SLOAD_COST_ADDITIONAL, ISTANBUL_SLOAD_GAS, WARM_STORAGE_READ_COST,
     },
     instruction_context::InstructionContext,
     interpreter_types::{InputsTr, InterpreterTypes, MemoryTr, RuntimeFlag, StackTr},
-    InstructionResult, Instruction,
+    Instruction, InstructionResult,
 };
 use revm_primitives::{hardfork::SpecId, keccak256, KECCAK_EMPTY};
 
@@ -32,11 +26,17 @@ pub struct MirrorContext {
 
 impl MirrorContext {
     pub fn new(config: Option<NativeTokenMirror>) -> Self {
-        Self { config, cache: RefCell::new(HashMap::new()) }
+        Self {
+            config,
+            cache: RefCell::new(HashMap::new()),
+        }
     }
 
     pub fn decimals(&self) -> u8 {
-        self.config.as_ref().and_then(|c| c.decimals).unwrap_or(NATIVE_DECIMALS)
+        self.config
+            .as_ref()
+            .and_then(|c| c.decimals)
+            .unwrap_or(NATIVE_DECIMALS)
     }
 
     pub fn observe_keccak(&self, input: &[u8], hash: B256) {
@@ -229,7 +229,11 @@ where
                     return;
                 }
                 if let Some(owner) = context.host.mirror().balance_owner(target, slot) {
-                    let native = context.host.balance(owner).map(|s| s.data).unwrap_or_default();
+                    let native = context
+                        .host
+                        .balance(owner)
+                        .map(|s| s.data)
+                        .unwrap_or_default();
                     *index = context.host.mirror().native_to_erc20(native);
                 } else {
                     *index = storage.data;
@@ -244,7 +248,11 @@ where
             return interp.halt_fatal();
         };
         if let Some(owner) = context.host.mirror().balance_owner(target, slot) {
-            let native = context.host.balance(owner).map(|s| s.data).unwrap_or_default();
+            let native = context
+                .host
+                .balance(owner)
+                .map(|s| s.data)
+                .unwrap_or_default();
             *index = context.host.mirror().native_to_erc20(native);
         } else {
             *index = storage.data;
@@ -283,7 +291,10 @@ where
 
     let state_load = if spec_id.is_enabled_in(SpecId::BERLIN) {
         let skip_cold = interp.gas.remaining() < COLD_SLOAD_COST_ADDITIONAL;
-        match context.host.sstore_skip_cold_load(target, index, value, skip_cold) {
+        match context
+            .host
+            .sstore_skip_cold_load(target, index, value, skip_cold)
+        {
             Ok(load) => load,
             Err(LoadError::ColdLoadSkipped) => {
                 interp.halt_oog();
@@ -302,7 +313,11 @@ where
         load
     };
 
-    if !interp.gas.record_cost(gas::dyn_sstore_cost(spec_id, &state_load.data, state_load.is_cold)) {
+    if !interp.gas.record_cost(gas::dyn_sstore_cost(
+        spec_id,
+        &state_load.data,
+        state_load.is_cold,
+    )) {
         interp.halt_oog();
         return;
     }
@@ -336,7 +351,8 @@ where
     H: MirrorHost,
 {
     let mut table: EthInstructions<W, H> = EthInstructions::new_mainnet();
-    // KECCAK256, SLOAD, SSTORE have dynamic gas (static_gas = 0) in the default table.
+    // KECCAK256, SLOAD, SSTORE have dynamic gas (static_gas = 0) in the default
+    // table.
     table.insert_instruction(0x20, Instruction::new(keccak256_with_mirror::<W, H>, 0));
     table.insert_instruction(0x54, Instruction::new(sload_with_mirror::<W, H>, 0));
     table.insert_instruction(0x55, Instruction::new(sstore_with_mirror::<W, H>, 0));
