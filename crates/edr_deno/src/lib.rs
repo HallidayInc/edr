@@ -234,6 +234,14 @@ impl RpcMethod for ApeRequestMethod {
     fn chain_id_request() -> Self {
         Self::ChainId(())
     }
+
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Call(_, _) => "eth_call",
+            Self::BlockNumber(_) => "eth_blockNumber",
+            Self::ChainId(_) => "eth_chainId",
+        }
+    }
 }
 
 fn rpc_headers(headers: Option<&[HttpHeader]>) -> Option<HeaderMap> {
