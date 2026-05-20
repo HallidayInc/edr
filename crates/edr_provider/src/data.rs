@@ -972,6 +972,7 @@ where
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn apply_native_token_mirror_storage_change(
         &self,
         diff: &mut StateDiff,

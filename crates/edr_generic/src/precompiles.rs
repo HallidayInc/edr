@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing, clippy::map_err_ignore, clippy::doc_markdown)]
+
 use std::boxed::Box;
 
 use alloy_primitives::Log;

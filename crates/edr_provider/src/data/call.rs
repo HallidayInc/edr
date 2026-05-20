@@ -63,6 +63,7 @@ impl<BlockEnvT: BlockEnvTrait> BlockEnvTrait for BlockEnvWithZeroBaseFee<BlockEn
 }
 
 /// Execute a transaction as a call. Returns the gas used and the output.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_call<'call, ChainSpecT, BlockchainT, InspectorT, StateT>(
     blockchain: BlockchainT,
     block_env: ChainSpecT::BlockEnv<'call, BlockHeader>,

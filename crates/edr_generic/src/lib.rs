@@ -1,5 +1,7 @@
 //! A slightly more flexible chain specification for Ethereum Layer 1 chain.
 
+#![allow(clippy::doc_markdown)]
+
 use edr_primitives::{address, Address};
 
 mod eip2718;

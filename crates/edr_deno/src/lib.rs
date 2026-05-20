@@ -1,3 +1,9 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::derivable_impls,
+    clippy::not_unsafe_ptr_arg_deref
+)]
+
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

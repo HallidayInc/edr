@@ -52,18 +52,16 @@ impl MirrorContext {
 
     pub fn observe_keccak(&self, input: &[u8], hash: B256) {
         let Some(config) = &self.config else { return };
-        if input.len() != 64 {
+        let Ok(chunk): Result<&[u8; 64], _> = input.try_into() else {
+            return;
+        };
+        let (addr_word, slot_bytes) = chunk.split_first_chunk::<32>().expect("len 64");
+        let slot = U256::from_be_bytes(*<&[u8; 32]>::try_from(slot_bytes).expect("len 32"));
+        let (zero_prefix, addr_bytes) = addr_word.split_first_chunk::<12>().expect("len 32");
+        if slot != config.balance_slot || zero_prefix.iter().any(|b| *b != 0) {
             return;
         }
-        let slot_bytes: [u8; 32] = input[32..64].try_into().expect("len 64");
-        let slot = U256::from_be_bytes(slot_bytes);
-        if slot != config.balance_slot {
-            return;
-        }
-        if input[..12].iter().any(|b| *b != 0) {
-            return;
-        }
-        let addr = Address::from_slice(&input[12..32]);
+        let addr = Address::from_slice(addr_bytes);
         let key = U256::from_be_bytes(hash.0);
         self.cache.borrow_mut().insert(key, addr);
     }
@@ -155,19 +153,13 @@ where
     }
     let ([offset], top) = unsafe { interp.stack.popn_top::<1>().unwrap_unchecked() };
 
-    let len_usize = match u256_to_usize(*top) {
-        Some(v) => v,
-        None => {
-            interp.halt(InstructionResult::InvalidOperandOOG);
-            return;
-        }
+    let Some(len_usize) = u256_to_usize(*top) else {
+        interp.halt(InstructionResult::InvalidOperandOOG);
+        return;
     };
-    let cost = match gas::keccak256_cost(len_usize) {
-        Some(c) => c,
-        None => {
-            interp.halt_oog();
-            return;
-        }
+    let Some(cost) = gas::keccak256_cost(len_usize) else {
+        interp.halt_oog();
+        return;
     };
     if !interp.gas.record_cost(cost) {
         interp.halt_oog();
@@ -177,12 +169,9 @@ where
     let hash = if len_usize == 0 {
         KECCAK_EMPTY
     } else {
-        let from = match u256_to_usize(offset) {
-            Some(v) => v,
-            None => {
-                interp.halt(InstructionResult::InvalidOperandOOG);
-                return;
-            }
+        let Some(from) = u256_to_usize(offset) else {
+            interp.halt(InstructionResult::InvalidOperandOOG);
+            return;
         };
         if !revm_interpreter::interpreter::resize_memory(
             &mut interp.gas,

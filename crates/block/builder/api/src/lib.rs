@@ -142,6 +142,7 @@ pub trait BlockBuilder<
     type LocalBlock;
 
     /// Creates a new block builder.
+    #[allow(clippy::too_many_arguments)]
     fn new_block_builder(
         blockchain: &'builder dyn Blockchain<
             BlockReceiptT,

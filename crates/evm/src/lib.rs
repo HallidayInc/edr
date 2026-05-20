@@ -67,7 +67,7 @@ pub struct ExecutionResultWithMetadata<HaltReasonT> {
 /// Runs a transaction without committing the state.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn dry_run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -119,7 +119,7 @@ pub fn dry_run<
 /// state.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn dry_run_with_inspector<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -180,7 +180,7 @@ pub fn dry_run_with_inspector<
 /// checks and creating accounts for new addresses.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn guaranteed_dry_run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -224,7 +224,7 @@ pub fn guaranteed_dry_run<
 /// addresses.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn guaranteed_dry_run_with_inspector<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -275,7 +275,7 @@ pub fn guaranteed_dry_run_with_inspector<
 /// Runs a transaction, committing the state in the process.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.

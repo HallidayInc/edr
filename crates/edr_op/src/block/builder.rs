@@ -1,3 +1,5 @@
+#![allow(clippy::doc_markdown, clippy::match_same_arms)]
+
 use core::fmt::Debug;
 
 use edr_block_builder_api::{
