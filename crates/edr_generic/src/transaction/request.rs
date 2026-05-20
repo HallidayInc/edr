@@ -55,7 +55,12 @@ impl<ChainSpecT> Sign for GenericTransactionRequest<ChainSpecT> {
 impl<ChainSpecT, TimerT> FromRpcType<L1CallRequest, TimerT>
     for GenericTransactionRequest<ChainSpecT>
 where
-    ChainSpecT: 'static + ChainSpec + EvmChainSpec + HardforkChainSpec + ProviderChainSpec + edr_provider::ProviderSpec<TimerT>,
+    ChainSpecT: 'static
+        + ChainSpec
+        + EvmChainSpec
+        + HardforkChainSpec
+        + ProviderChainSpec
+        + edr_provider::ProviderSpec<TimerT>,
     TimerT: Clone + TimeSinceEpoch,
 {
     type Context<'context> = CallContext<'context, ChainSpecT, TimerT>;
@@ -65,15 +70,22 @@ where
         value: L1CallRequest,
         context: Self::Context<'_>,
     ) -> Result<Self, Self::Error> {
-        // SAFETY: CallContext has the same memory layout regardless of ChainSpecT parameter
-        // GenericChainSpec and L1ChainSpec have compatible runtime representations
+        // SAFETY: CallContext has the same memory layout regardless of ChainSpecT
+        // parameter GenericChainSpec and L1ChainSpec have compatible runtime
+        // representations
         let l1_context: CallContext<'_, L1ChainSpec, TimerT> =
             unsafe { std::mem::transmute(context) };
 
-        match <L1TransactionRequest as FromRpcType<L1CallRequest, TimerT>>::from_rpc_type(value, l1_context) {
+        match <L1TransactionRequest as FromRpcType<L1CallRequest, TimerT>>::from_rpc_type(
+            value, l1_context,
+        ) {
             Ok(req) => Ok(Self(req, PhantomData)),
-            Err(edr_provider::ProviderError::InvalidArgument(msg)) => Err(ProviderError::InvalidArgument(msg)),
-            Err(_) => Err(ProviderError::InvalidArgument("Failed to convert RPC call request".to_string())),
+            Err(edr_provider::ProviderError::InvalidArgument(msg)) => {
+                Err(ProviderError::InvalidArgument(msg))
+            }
+            Err(_) => Err(ProviderError::InvalidArgument(
+                "Failed to convert RPC call request".to_string(),
+            )),
         }
     }
 }
@@ -81,7 +93,12 @@ where
 impl<ChainSpecT, TimerT> FromRpcType<L1RpcTransactionRequest, TimerT>
     for GenericTransactionRequest<ChainSpecT>
 where
-    ChainSpecT: 'static + ChainSpec + EvmChainSpec + HardforkChainSpec + ProviderChainSpec + edr_provider::ProviderSpec<TimerT>,
+    ChainSpecT: 'static
+        + ChainSpec
+        + EvmChainSpec
+        + HardforkChainSpec
+        + ProviderChainSpec
+        + edr_provider::ProviderSpec<TimerT>,
     TimerT: Clone + TimeSinceEpoch,
 {
     type Context<'context> = TransactionContext<'context, ChainSpecT, TimerT>;
@@ -91,15 +108,22 @@ where
         value: L1RpcTransactionRequest,
         context: Self::Context<'_>,
     ) -> Result<Self, Self::Error> {
-        // SAFETY: TransactionContext has the same memory layout regardless of ChainSpecT parameter
-        // GenericChainSpec and L1ChainSpec have compatible runtime representations
+        // SAFETY: TransactionContext has the same memory layout regardless of
+        // ChainSpecT parameter GenericChainSpec and L1ChainSpec have compatible
+        // runtime representations
         let l1_context: TransactionContext<'_, L1ChainSpec, TimerT> =
             unsafe { std::mem::transmute(context) };
 
-        match <L1TransactionRequest as FromRpcType<L1RpcTransactionRequest, TimerT>>::from_rpc_type(value, l1_context) {
+        match <L1TransactionRequest as FromRpcType<L1RpcTransactionRequest, TimerT>>::from_rpc_type(
+            value, l1_context,
+        ) {
             Ok(req) => Ok(Self(req, PhantomData)),
-            Err(edr_provider::ProviderError::InvalidArgument(msg)) => Err(ProviderError::InvalidArgument(msg)),
-            Err(_) => Err(ProviderError::InvalidArgument("Failed to convert RPC transaction request".to_string())),
+            Err(edr_provider::ProviderError::InvalidArgument(msg)) => {
+                Err(ProviderError::InvalidArgument(msg))
+            }
+            Err(_) => Err(ProviderError::InvalidArgument(
+                "Failed to convert RPC transaction request".to_string(),
+            )),
         }
     }
 }

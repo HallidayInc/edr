@@ -339,10 +339,9 @@ impl<
                         >,
                     >,
                 >,
-            > = OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
+            > = OverriddenPrecompileProvider::with_precompiles(
                 ChainSpecT::PrecompileProvider::default(),
                 custom_precompiles.clone(),
-                native_token_mirror.cloned(),
             );
             precompile_provider.set_spec(hardfork);
             precompile_provider.into_addresses()

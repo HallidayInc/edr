@@ -67,7 +67,7 @@ pub struct ExecutionResultWithMetadata<HaltReasonT> {
 /// Runs a transaction without committing the state.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn dry_run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -95,15 +95,19 @@ pub fn dry_run<
 > {
     let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
 
-    let mut precompile_provider =
-        OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
-            EvmChainSpecT::PrecompileProvider::default(),
-            custom_precompiles.clone(),
-            native_token_mirror.cloned(),
-        );
+    let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
+        EvmChainSpecT::PrecompileProvider::default(),
+        custom_precompiles.clone(),
+    );
 
-    let result =
-        EvmChainSpecT::dry_run(block, cfg, transaction, database, &mut precompile_provider)?;
+    let result = EvmChainSpecT::dry_run(
+        block,
+        cfg,
+        transaction,
+        database,
+        &mut precompile_provider,
+        native_token_mirror.cloned(),
+    )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(
         result,
@@ -115,7 +119,7 @@ pub fn dry_run<
 /// state.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn dry_run_with_inspector<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -151,12 +155,10 @@ pub fn dry_run_with_inspector<
 > {
     let database = WrapDatabaseRef(DatabaseComponents { blockchain, state });
 
-    let mut precompile_provider =
-        OverriddenPrecompileProvider::with_precompiles_and_native_token_mirror(
-            EvmChainSpecT::PrecompileProvider::default(),
-            custom_precompiles.clone(),
-            native_token_mirror.cloned(),
-        );
+    let mut precompile_provider = OverriddenPrecompileProvider::with_precompiles(
+        EvmChainSpecT::PrecompileProvider::default(),
+        custom_precompiles.clone(),
+    );
 
     let result = EvmChainSpecT::dry_run_with_inspector(
         block,
@@ -165,6 +167,7 @@ pub fn dry_run_with_inspector<
         database,
         &mut precompile_provider,
         inspector,
+        native_token_mirror.cloned(),
     )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(
@@ -177,7 +180,7 @@ pub fn dry_run_with_inspector<
 /// checks and creating accounts for new addresses.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn guaranteed_dry_run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -221,7 +224,7 @@ pub fn guaranteed_dry_run<
 /// addresses.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn guaranteed_dry_run_with_inspector<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.
@@ -272,7 +275,7 @@ pub fn guaranteed_dry_run_with_inspector<
 /// Runs a transaction, committing the state in the process.
 #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 // Cannot meaningfully be simplified further
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub fn run<
     // As this generic type always needs to be specified, placing it first makes the function
     // easier to use; e.g.

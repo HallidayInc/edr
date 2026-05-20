@@ -2653,6 +2653,7 @@ dependencies = [
  "edr_eip7702",
  "edr_eip7892",
  "edr_evm",
+ "edr_mirror",
  "edr_precompile",
  "edr_primitives",
  "edr_receipt",
@@ -2704,6 +2705,7 @@ dependencies = [
 name = "edr_chain_spec_evm"
 version = "0.3.8"
 dependencies = [
+ "edr_chain_config",
  "edr_chain_spec",
  "edr_database_components",
  "edr_primitives",
@@ -2982,6 +2984,7 @@ dependencies = [
  "edr_eip7702",
  "edr_eip7892",
  "edr_eth",
+ "edr_mirror",
  "edr_primitives",
  "edr_provider",
  "edr_receipt",
@@ -3053,6 +3056,20 @@ dependencies = [
  "paste",
  "thiserror 2.0.12",
  "tracing",
+]
+
+[[package]]
+name = "edr_mirror"
+version = "0.3.8"
+dependencies = [
+ "alloy-primitives",
+ "edr_chain_config",
+ "edr_primitives",
+ "revm-context-interface",
+ "revm-handler",
+ "revm-interpreter",
+ "revm-primitives",
+ "revm-state",
 ]
 
 [[package]]
@@ -3183,6 +3200,7 @@ dependencies = [
  "edr_eth",
  "edr_evm",
  "edr_generic",
+ "edr_mirror",
  "edr_napi_core",
  "edr_primitives",
  "edr_provider",
@@ -3217,8 +3235,6 @@ dependencies = [
 name = "edr_precompile"
 version = "0.3.8"
 dependencies = [
- "alloy-primitives",
- "edr_chain_config",
  "edr_primitives",
  "revm-context-interface",
  "revm-handler",
@@ -3692,6 +3708,7 @@ dependencies = [
  "edr_chain_spec_evm",
  "edr_chain_spec_provider",
  "edr_chain_spec_receipt",
+ "edr_mirror",
  "edr_primitives",
  "edr_provider",
  "edr_receipt",

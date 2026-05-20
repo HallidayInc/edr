@@ -1,16 +1,20 @@
+#![allow(clippy::indexing_slicing, clippy::map_err_ignore, clippy::doc_markdown)]
+
 use std::boxed::Box;
 
 use alloy_primitives::Log;
-use alloy_sol_types::{Revert, SolCall, SolError, SolEvent, SolValue, sol};
-use revm_context_interface::{Cfg, Transaction as _};
+use alloy_sol_types::{sol, Revert, SolCall, SolError, SolEvent, SolValue};
 use edr_chain_spec_evm::{
-    ContextTrait, Database, InterpreterResult, JournalTrait as _, handler::EthPrecompiles,
+    handler::EthPrecompiles, ContextTrait, Database, InterpreterResult, JournalTrait as _,
 };
-use edr_primitives::{Address, B256, Bytes, U256, address, keccak256};
+use edr_primitives::{address, keccak256, Address, Bytes, B256, U256};
+use revm_context_interface::{Cfg, Transaction as _};
 use revm_handler::PrecompileProvider;
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
 
-use crate::{APE_APY_SLOT, APE_PRECOMPILE_STATE_ADDRESS, APE_SHARE_COUNT_SLOT, APE_SHARE_PRICE_SLOT};
+use crate::{
+    APE_APY_SLOT, APE_PRECOMPILE_STATE_ADDRESS, APE_SHARE_COUNT_SLOT, APE_SHARE_PRICE_SLOT,
+};
 
 const ARBSYS_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
 const ARBINFO_ADDRESS: Address = address!("0000000000000000000000000000000000000065");
@@ -94,27 +98,29 @@ sol! {
     }
 }
 
-use self::ArbInfo::{
-    configureAutomaticYieldCall, configureDelegateYieldCall, configureVoidYieldCall,
-    getBalanceCall, getBalanceValuesCall, getCodeCall, getDelegateCall,
-    getYieldConfigurationCall,
-};
-use self::ArbOwnerPublic::{
-    ChainOwnerRectified, getAllChainOwnersCall, getAllNativeTokenOwnersCall,
-    getAllTransactionFilterersCall, getBrotliCompressionLevelCall, getCollectTipsCall,
-    getFilteredFundsRecipientCall, getInfraFeeAccountCall, getMaxStylusContractFragmentsCall,
-    getNativeTokenManagementFromCall, getNetworkFeeAccountCall, getParentGasFloorPerTokenCall,
-    getApyCall, getShareCountCall, getSharePriceCall,
-    getScheduledUpgradeCall, getScheduledUpgradeReturn, getTransactionFilteringFromCall,
-    isCalldataPriceIncreaseEnabledCall, isChainOwnerCall, isNativeTokenOwnerCall,
-    isTransactionFiltererCall, rectifyChainOwnerCall,
-};
-use self::ArbSys::{
-    InvalidBlockNumber, L2ToL1Tx, SendMerkleUpdate, arbBlockHashCall, arbBlockNumberCall,
-    arbChainIDCall, arbOSVersionCall, getStorageGasAvailableCall, isTopLevelCallCall,
-    mapL1SenderContractAddressToL2AliasCall, myCallersAddressWithoutAliasingCall,
-    sendMerkleTreeStateCall, sendMerkleTreeStateReturn, sendTxToL1Call,
-    wasMyCallersAddressAliasedCall, withdrawEthCall,
+use self::{
+    ArbInfo::{
+        configureAutomaticYieldCall, configureDelegateYieldCall, configureVoidYieldCall,
+        getBalanceCall, getBalanceValuesCall, getCodeCall, getDelegateCall,
+        getYieldConfigurationCall,
+    },
+    ArbOwnerPublic::{
+        getAllChainOwnersCall, getAllNativeTokenOwnersCall, getAllTransactionFilterersCall,
+        getApyCall, getBrotliCompressionLevelCall, getCollectTipsCall,
+        getFilteredFundsRecipientCall, getInfraFeeAccountCall, getMaxStylusContractFragmentsCall,
+        getNativeTokenManagementFromCall, getNetworkFeeAccountCall, getParentGasFloorPerTokenCall,
+        getScheduledUpgradeCall, getScheduledUpgradeReturn, getShareCountCall, getSharePriceCall,
+        getTransactionFilteringFromCall, isCalldataPriceIncreaseEnabledCall, isChainOwnerCall,
+        isNativeTokenOwnerCall, isTransactionFiltererCall, rectifyChainOwnerCall,
+        ChainOwnerRectified,
+    },
+    ArbSys::{
+        arbBlockHashCall, arbBlockNumberCall, arbChainIDCall, arbOSVersionCall,
+        getStorageGasAvailableCall, isTopLevelCallCall, mapL1SenderContractAddressToL2AliasCall,
+        myCallersAddressWithoutAliasingCall, sendMerkleTreeStateCall, sendMerkleTreeStateReturn,
+        sendTxToL1Call, wasMyCallersAddressAliasedCall, withdrawEthCall, InvalidBlockNumber,
+        L2ToL1Tx, SendMerkleUpdate,
+    },
 };
 
 /// Arbitrum precompile provider.
@@ -166,13 +172,11 @@ where
     }
 
     fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(
-            self.inner.warm_addresses().chain([
-                ARBSYS_ADDRESS,
-                ARBINFO_ADDRESS,
-                ARBOWNERPUBLIC_ADDRESS,
-            ]),
-        )
+        Box::new(self.inner.warm_addresses().chain([
+            ARBSYS_ADDRESS,
+            ARBINFO_ADDRESS,
+            ARBOWNERPUBLIC_ADDRESS,
+        ]))
     }
 
     fn contains(&self, address: &Address) -> bool {
@@ -241,7 +245,10 @@ where
         };
 
         let balance = load_account_balance(context, call.account)?;
-        return Ok(success(inputs, (balance, U256::ZERO, U256::ZERO).abi_encode()));
+        return Ok(success(
+            inputs,
+            (balance, U256::ZERO, U256::ZERO).abi_encode(),
+        ));
     }
 
     if selector == getYieldConfigurationCall::SELECTOR {
@@ -445,14 +452,22 @@ where
         let max_delta = U256::from(256);
 
         if requested >= current || requested.saturating_add(max_delta) < current {
-            return Ok(revert(inputs, InvalidBlockNumber { requested, current }.abi_encode()));
+            return Ok(revert(
+                inputs,
+                InvalidBlockNumber { requested, current }.abi_encode(),
+            ));
         }
 
         let Ok(requested_block_num) = requested.try_into() else {
-            return Ok(revert(inputs, InvalidBlockNumber { requested, current }.abi_encode()));
+            return Ok(revert(
+                inputs,
+                InvalidBlockNumber { requested, current }.abi_encode(),
+            ));
         };
 
-        let block_hash = context.block_hash(requested_block_num).unwrap_or(B256::ZERO);
+        let block_hash = context
+            .block_hash(requested_block_num)
+            .unwrap_or(B256::ZERO);
         return Ok(success(inputs, block_hash.abi_encode()));
     }
 
@@ -485,7 +500,10 @@ where
             return Ok(revert_with_message(inputs, "ArbSys: invalid calldata"));
         }
 
-        return Ok(success(inputs, (context.journal().depth() <= 2).abi_encode()));
+        return Ok(success(
+            inputs,
+            (context.journal().depth() <= 2).abi_encode(),
+        ));
     }
 
     if selector == mapL1SenderContractAddressToL2AliasCall::SELECTOR {
@@ -829,7 +847,10 @@ where
             .map_err(|error| error.to_string())?;
 
         if !account.data.decr_balance(callvalue) {
-            return Ok(revert_with_message(inputs, "ArbSys: insufficient transferred value"));
+            return Ok(revert_with_message(
+                inputs,
+                "ArbSys: insufficient transferred value",
+            ));
         }
     }
 
@@ -969,9 +990,9 @@ fn merkle_root_from_partials(partials: &[B256]) -> B256 {
         return B256::ZERO;
     };
 
-    rest.iter()
-        .copied()
-        .fold(*first, |root, partial| keccak256([partial.as_slice(), root.as_slice()].concat()))
+    rest.iter().copied().fold(*first, |root, partial| {
+        keccak256([partial.as_slice(), root.as_slice()].concat())
+    })
 }
 
 fn send_count_slot() -> U256 {

@@ -392,6 +392,10 @@ where
     }
 
     /// Returns the instance's network ID.
+    pub fn native_token_mirror(&self) -> Option<&NativeTokenMirror> {
+        self.native_token_mirror.as_ref()
+    }
+
     pub fn network_id(&self) -> String {
         self.network_id.to_string()
     }
@@ -968,6 +972,7 @@ where
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn apply_native_token_mirror_storage_change(
         &self,
         diff: &mut StateDiff,

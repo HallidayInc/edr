@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use core::cmp;
 
 use edr_block_api::{Block as _, FetchBlockReceipts};

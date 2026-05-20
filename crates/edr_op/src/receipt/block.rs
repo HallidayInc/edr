@@ -85,7 +85,7 @@ impl ReceiptConstructor<OpSignedTransaction> for OpBlockReceipt {
 
         let eth = {
             L1BlockReceipt::new_receipt(
-                &(),
+                &edr_mirror::MirrorContext::new(None),
                 hardfork.into(),
                 transaction,
                 transaction_receipt,
