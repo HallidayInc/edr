@@ -2705,6 +2705,7 @@ dependencies = [
 name = "edr_chain_spec_evm"
 version = "0.3.8"
 dependencies = [
+ "edr_chain_config",
  "edr_chain_spec",
  "edr_database_components",
  "edr_primitives",

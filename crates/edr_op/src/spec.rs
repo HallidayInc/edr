@@ -126,6 +126,7 @@ impl EvmChainSpec for OpChainSpec {
         transaction: Self::SignedTransaction,
         mut database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        _mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -170,6 +171,7 @@ impl EvmChainSpec for OpChainSpec {
         mut database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        _mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<

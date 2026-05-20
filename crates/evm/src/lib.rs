@@ -102,8 +102,14 @@ pub fn dry_run<
             native_token_mirror.cloned(),
         );
 
-    let result =
-        EvmChainSpecT::dry_run(block, cfg, transaction, database, &mut precompile_provider)?;
+    let result = EvmChainSpecT::dry_run(
+        block,
+        cfg,
+        transaction,
+        database,
+        &mut precompile_provider,
+        native_token_mirror.cloned(),
+    )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(
         result,
@@ -165,6 +171,7 @@ pub fn dry_run_with_inspector<
         database,
         &mut precompile_provider,
         inspector,
+        native_token_mirror.cloned(),
     )?;
 
     Ok(ExecutionResultAndStateWithMetadata::new(

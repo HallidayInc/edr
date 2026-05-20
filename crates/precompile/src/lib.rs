@@ -106,11 +106,13 @@ impl<
         context: &mut ContextT,
         inputs: &CallInputs,
     ) -> Result<Option<Self::Output>, String> {
-        if let Some(native_token_mirror) = &self.native_token_mirror
-            && inputs.bytecode_address == native_token_mirror.token
-        {
-            return run_native_token_mirror(context, inputs, native_token_mirror).map(Some);
-        }
+        // Mirror is now handled at the instruction-table level (see
+        // edr_mirror crate). Calls to the token address fall through to
+        // the real ERC-20 bytecode, while SLOAD/SSTORE on the balance
+        // mapping slot are intercepted to read/write native balance.
+        // The legacy `run_native_token_mirror` precompile is left for now
+        // but no longer dispatched to.
+        let _ = &self.native_token_mirror; // keep field for serde/config compat
 
         let Some(precompile) = self.custom_precompiles.get(&inputs.bytecode_address) else {
             return self.base.run(context, inputs);

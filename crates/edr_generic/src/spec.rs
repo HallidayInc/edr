@@ -174,6 +174,7 @@ impl EvmChainSpec for GenericChainSpec {
         transaction: Self::SignedTransaction,
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -186,7 +187,7 @@ impl EvmChainSpec for GenericChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -211,6 +212,7 @@ impl EvmChainSpec for GenericChainSpec {
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -227,7 +229,7 @@ impl EvmChainSpec for GenericChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -383,6 +385,7 @@ impl EvmChainSpec for ArbChainSpec {
         transaction: Self::SignedTransaction,
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -395,7 +398,7 @@ impl EvmChainSpec for ArbChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -420,6 +423,7 @@ impl EvmChainSpec for ArbChainSpec {
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -432,7 +436,7 @@ impl EvmChainSpec for ArbChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -586,6 +590,7 @@ impl EvmChainSpec for ApeChainSpec {
         transaction: Self::SignedTransaction,
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -598,7 +603,7 @@ impl EvmChainSpec for ApeChainSpec {
             tx: transaction,
             journaled_state: Journal::new(database),
             cfg,
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
@@ -623,6 +628,7 @@ impl EvmChainSpec for ApeChainSpec {
         database: DatabaseT,
         precompile_provider: PrecompileProviderT,
         inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
     ) -> Result<
         ExecutionResultAndState<Self::HaltReason>,
         TransactionError<
@@ -635,7 +641,7 @@ impl EvmChainSpec for ApeChainSpec {
             tx: Self::SignedTransaction::default(),
             cfg,
             journaled_state: Journal::new(database),
-            chain: edr_mirror::MirrorContext::new(None),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
             local: LocalContext::default(),
             error: Ok(()),
         };
