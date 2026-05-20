@@ -1,4 +1,15 @@
 //! Native token mirror via instruction-table hooks.
+//!
+//! KECCAK256/SLOAD/SSTORE on the mirror token's balance map are intercepted so
+//! interpreter-level ERC20 reads and writes operate on the underlying native
+//! balance. This is transparent for real bytecode (transfer, balanceOf,
+//! crosschainBurn, etc).
+//!
+//! Out-of-band RPC writes (e.g. `hardhat_setStorageAt`) are *not* mirrored:
+//! the RPC delivers an already-hashed storage key with no preimage, so we
+//! cannot recover the owner address to update the matching native balance.
+//! Cheat layers that want to fund a mirrored balance must call
+//! `hardhat_setBalance` instead.
 
 use std::{cell::RefCell, collections::HashMap};
 
