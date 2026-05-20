@@ -32,7 +32,6 @@ pub struct MirrorContext {
 
 impl MirrorContext {
     pub fn new(config: Option<NativeTokenMirror>) -> Self {
-        eprintln!("[edr_mirror] MirrorContext::new config={:?}", config.as_ref().map(|c| (c.token, c.balance_slot, c.decimals)));
         Self { config, cache: RefCell::new(HashMap::new()) }
     }
 
@@ -55,7 +54,6 @@ impl MirrorContext {
         }
         let addr = Address::from_slice(&input[12..32]);
         let key = U256::from_be_bytes(hash.0);
-        eprintln!("[edr_mirror] observe_keccak addr={addr:?} -> key={key:?}");
         self.cache.borrow_mut().insert(key, addr);
     }
 
@@ -64,9 +62,7 @@ impl MirrorContext {
         if target != config.token {
             return None;
         }
-        let r = self.cache.borrow().get(&slot).copied();
-        eprintln!("[edr_mirror] balance_owner target={target:?} slot={slot:?} hit={:?}", r);
-        r
+        self.cache.borrow().get(&slot).copied()
     }
 
     pub fn native_to_erc20(&self, balance: U256) -> U256 {
@@ -238,15 +234,11 @@ where
                     interp.halt_oog();
                     return;
                 }
-                let storage_data = storage.data;
                 if let Some(owner) = context.host.mirror().balance_owner(target, slot) {
                     let native = context.host.balance(owner).map(|s| s.data).unwrap_or_default();
-                    let scaled = context.host.mirror().native_to_erc20(native);
-                    eprintln!("[edr_mirror] sload REDIRECT target={target:?} slot={slot} storage={storage_data} owner={owner:?} native={native} -> erc20={scaled}");
-                    *index = scaled;
+                    *index = context.host.mirror().native_to_erc20(native);
                 } else {
-                    eprintln!("[edr_mirror] sload PASSTHROUGH target={target:?} slot={slot} -> {storage_data}");
-                    *index = storage_data;
+                    *index = storage.data;
                 }
             }
             Err(LoadError::ColdLoadSkipped) => interp.halt_oog(),
@@ -327,10 +319,7 @@ where
 
     if let Some(owner) = context.host.mirror().balance_owner(target, index) {
         let native = context.host.mirror().erc20_to_native(value);
-        eprintln!("[edr_mirror] sstore REDIRECT target={target:?} slot={index} value={value} -> owner={owner:?} native={native}");
         context.host.set_native_balance(owner, native);
-    } else {
-        eprintln!("[edr_mirror] sstore PASSTHROUGH target={target:?} slot={index} value={value}");
     }
 }
 

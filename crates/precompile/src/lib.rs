@@ -184,16 +184,20 @@ impl<
 fn unique_addresses<BaseProviderT, ContextT>(
     base: &BaseProviderT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
-    native_token_mirror: Option<&NativeTokenMirror>,
+    _native_token_mirror: Option<&NativeTokenMirror>,
 ) -> HashSet<Address>
 where
     BaseProviderT: PrecompileProvider<ContextT, Output = InterpreterResult>,
     ContextT: ContextTrait,
 {
+    // NOTE: native_token_mirror.token is intentionally NOT included here.
+    // Calls to the mirror token now fall through to the real ERC-20 bytecode
+    // (handled at the instruction-table layer via edr_mirror). Reporting it
+    // as a precompile address would mis-classify the call for the inspector
+    // and produce "Disconnected trace" panics in revm-inspectors.
     custom_precompiles
         .keys()
         .cloned()
-        .chain(native_token_mirror.map(|mirror| mirror.token))
         .chain(base.warm_addresses())
         .collect()
 }
