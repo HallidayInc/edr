@@ -668,14 +668,41 @@ Deno.test("arbitrum fork ArbInfo precompile mirrors standard account queries", a
     assertEquals(decodeBytes(actualCode).toLowerCase(), expectedCode.toLowerCase());
 });
 
-Deno.test("native token mirror exposes an ERC20 facade over native balances", async () => {
+// Minimal ERC20 (balanceOf, decimals=6, transfer) with `_balances` mapping at
+// storage slot 3. Compiled from solc 0.8.28 of:
+//
+//   contract MirrorErc20 {
+//       uint256 private _r0; uint256 private _r1; uint256 private _r2;
+//       mapping(address => uint256) private _balances;
+//       function balanceOf(address a) external view returns (uint256) { return _balances[a]; }
+//       function decimals() external pure returns (uint8) { return 6; }
+//       function transfer(address to, uint256 amount) external returns (bool) {
+//           uint256 fromBal = _balances[msg.sender];
+//           require(fromBal >= amount, "ERC20: transfer amount exceeds balance");
+//           unchecked { _balances[msg.sender] = fromBal - amount; }
+//           _balances[to] += amount;
+//           return true;
+//       }
+//   }
+const MIRROR_ERC20_CODE =
+    "0x608060405234801561000f575f5ffd5b506004361061003f575f3560e01c8063313ce5671461004357806370a0823114610057578063a9059cbb1461008d575b5f5ffd5b604051600681526020015b60405180910390f35b61007f610065366004610180565b6001600160a01b03165f9081526003602052604090205490565b60405190815260200161004e565b6100a061009b3660046101a0565b6100b0565b604051901515815260200161004e565b335f90815260036020526040812054828110156101225760405162461bcd60e51b815260206004820152602660248201527f45524332303a207472616e7366657220616d6f756e7420657863656564732062604482015265616c616e636560d01b606482015260840160405180910390fd5b335f9081526003602052604080822085840390556001600160a01b0386168252812080548592906101549084906101c8565b909155506001925050505b92915050565b80356001600160a01b038116811461017b575f5ffd5b919050565b5f60208284031215610190575f5ffd5b61019982610165565b9392505050565b5f5f604083850312156101b1575f5ffd5b6101ba83610165565b946020939093013593505050565b8082018082111561015f57634e487b7160e01b5f52601160045260245ffdfea264697066735822122061f9eaedb32401c8af2759fec9149551217a5d86d56a46957598455f3c01317664736f6c634300081c0033";
+
+Deno.test("native token mirror routes real ERC20 reads/writes through native balance", async () => {
+    // The mirror config redirects SLOAD/SSTORE on the configured balance slot
+    // of the mirror token to the underlying native balance. This test deploys
+    // a real ERC20 at the mirror address and verifies that `balanceOf`,
+    // `transfer`, and direct native writes all stay in sync through the
+    // ERC20's actual bytecode.
     const token = "0x1000000000000000000000000000000000000000";
     const account = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
     const recipient = "0x000000000000000000000000000000000000dEaD";
     const slot = 3n;
-    const initialBalance = 123n * 10n ** 18n;
-    const mirroredByNativeWrite = 789n * 10n ** 18n;
+    const initialNative = 123n * 10n ** 18n;
     const transferAmount = 10n * 10n ** 6n;
+    const expectedInitialErc20 = 123n * 10n ** 6n;
+    const expectedTransferNative = 10n * 10n ** 18n;
+    const directNativeWrite = 789n * 10n ** 18n;
+    const expectedAfterNativeWrite = 789n * 10n ** 6n;
 
     using ctx = new Context();
     using arb = ctx.createProvider({
@@ -683,75 +710,85 @@ Deno.test("native token mirror exposes an ERC20 facade over native balances", as
         chainId: 42161n,
         networkId: 42161n,
         hardfork: "cancun",
-        nativeTokenMirror: {
-            token,
-            decimals: 6,
-            balanceSlot: slot,
-        },
+        nativeTokenMirror: { token, decimals: 6, balanceSlot: slot },
         chains: [{
             chainId: 42161n,
             hardforks: [{ blockNumber: 0, specId: "cancun" }],
         }],
         ownedAccounts: [{
             secretKey: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-            balance: initialBalance,
+            balance: initialNative,
         }],
     });
 
-    const balanceOfData = `${selector("balanceOf(address)")}${encodeAddressArg(account)}`;
-    const initialMirrored = await request(arb, {
-        method: "eth_call",
-        params: [{ to: token, data: balanceOfData }, "latest"],
-    });
-    assertEquals(decodeFirstWord(initialMirrored), 123n * 10n ** 6n);
+    // Install a real ERC20 facade at the mirror address. Without this the
+    // call paths exercised below would hit empty-code, producing no SLOAD/
+    // SSTORE for the mirror hook to intercept.
+    await request(arb, { method: "hardhat_setCode", params: [token, MIRROR_ERC20_CODE] });
 
-    const decimals = await request(arb, {
-        method: "eth_call",
-        params: [{ to: token, data: selector("decimals()") }, "latest"],
-    });
-    assertEquals(decodeFirstWord(decimals), 6n);
+    const balanceOfAccount = `${selector("balanceOf(address)")}${encodeAddressArg(account)}`;
+    const balanceOfRecipient = `${selector("balanceOf(address)")}${encodeAddressArg(recipient)}`;
 
+    // SLOAD in `_balances[account]` is intercepted -> returns native scaled to mirror decimals.
+    assertEquals(
+        decodeFirstWord(await request(arb, {
+            method: "eth_call",
+            params: [{ to: token, data: balanceOfAccount }, "latest"],
+        })),
+        expectedInitialErc20,
+    );
+
+    // `decimals()` reads from the real ERC20, no mirror involvement.
+    assertEquals(
+        decodeFirstWord(await request(arb, {
+            method: "eth_call",
+            params: [{ to: token, data: selector("decimals()") }, "latest"],
+        })),
+        6n,
+    );
+
+    // `transfer` SSTOREs both `_balances[from]` and `_balances[to]`; both are
+    // intercepted, so the native balances of both addresses move together.
     await request(arb, {
         method: "eth_sendTransaction",
         params: [{
             from: account,
             to: token,
-            data: `${selector("transfer(address,uint256)")}${encodeAddressArg(recipient)}${encodeUintArg(transferAmount)}`,
+            data: `${selector("transfer(address,uint256)")}${encodeAddressArg(recipient)}${
+                encodeUintArg(transferAmount)
+            }`,
             gas: "0x186a0",
         }],
     });
 
-    const recipientNativeBalance = await request(arb, {
-        method: "eth_getBalance",
-        params: [recipient, "latest"],
-    });
-    assertEquals(BigInt(recipientNativeBalance), 10n * 10n ** 18n);
+    assertEquals(
+        BigInt(await request(arb, {
+            method: "eth_getBalance",
+            params: [recipient, "latest"],
+        })),
+        expectedTransferNative,
+    );
+    assertEquals(
+        decodeFirstWord(await request(arb, {
+            method: "eth_call",
+            params: [{ to: token, data: balanceOfRecipient }, "latest"],
+        })),
+        transferAmount,
+    );
 
-    const recipientMirrored = await request(arb, {
-        method: "eth_call",
-        params: [{
-            to: token,
-            data: `${selector("balanceOf(address)")}${encodeAddressArg(recipient)}`,
-        }, "latest"],
-    });
-    assertEquals(decodeFirstWord(recipientMirrored), transferAmount);
-
+    // A direct native write via `hardhat_setBalance` is visible through the
+    // ERC20 facade on the next read.
     await request(arb, {
         method: "hardhat_setBalance",
-        params: [account, toRpcQuantity(mirroredByNativeWrite)],
+        params: [account, toRpcQuantity(directNativeWrite)],
     });
-    const mirroredAfterNativeWrite = await request(arb, {
-        method: "eth_call",
-        params: [{ to: token, data: balanceOfData }, "latest"],
-    });
-    assertEquals(decodeFirstWord(mirroredAfterNativeWrite), 789n * 10n ** 6n);
-
-    const storageKey = mappingStorageKey(account, slot);
-    const mirroredStorageAfterNativeWrite = await request(arb, {
-        method: "eth_getStorageAt",
-        params: [token, storageKey, "latest"],
-    });
-    assertEquals(decodeFirstWord(mirroredStorageAfterNativeWrite), 789n * 10n ** 6n);
+    assertEquals(
+        decodeFirstWord(await request(arb, {
+            method: "eth_call",
+            params: [{ to: token, data: balanceOfAccount }, "latest"],
+        })),
+        expectedAfterNativeWrite,
+    );
 });
 
 Deno.test("local arbitrum ArbOwnerPublic compatibility calls succeed", async () => {

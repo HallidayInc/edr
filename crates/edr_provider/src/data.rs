@@ -742,7 +742,6 @@ where
             None
         };
 
-        edr_mirror::install_cache(edr_mirror::new_cache());
         Ok(Self {
             runtime_handle,
             bail_on_call_failure: config.bail_on_call_failure,

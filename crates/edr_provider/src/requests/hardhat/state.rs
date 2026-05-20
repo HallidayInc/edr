@@ -9,18 +9,7 @@ pub fn handle_set_balance<ChainSpecT: SyncProviderSpec<TimerT>, TimerT: Clone + 
     address: Address,
     balance: U256,
 ) -> Result<bool, ProviderErrorForChainSpec<ChainSpecT>> {
-    // on chains with a native token mirror, the gas token's user-facing decimals
-    // are the mirror token's decimals; interpret the requested balance there and
-    // translate to the underlying 18-decimal native representation. add a small
-    // native gas headroom so paying tx fees does not drop the apparent (mirror)
-    // balance below the requested amount.
-    let native = match data.native_token_mirror() {
-        Some(mirror) => mirror
-            .erc20_to_native_balance(balance)
-            .saturating_add(U256::from(10u64).pow(U256::from(18))),
-        None => balance,
-    };
-    data.set_balance(address, native)?;
+    data.set_balance(address, balance)?;
     Ok(true)
 }
 
@@ -68,7 +57,15 @@ pub fn handle_set_storage_at<
             .get(&index)
             .copied();
         if let Some(owner) = owner {
-            return handle_set_balance(data, owner, value);
+            // value comes from an ERC20 storage write, so it's in mirror-token
+            // decimals. translate to native (18dp) and add a small gas headroom
+            // so a follow-up transfer of `value` can pay tx fees without
+            // dropping the apparent balance below the requested amount.
+            let native = mirror
+                .erc20_to_native_balance(value)
+                .saturating_add(U256::from(10u64).pow(U256::from(18)));
+            data.set_balance(owner, native)?;
+            return Ok(true);
         }
     }
     data.set_account_storage_slot(address, index, value)?;

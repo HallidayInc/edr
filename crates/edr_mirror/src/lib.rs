@@ -13,9 +13,8 @@
 //! through the native balance transparently.
 
 use std::{
-    cell::RefCell,
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use alloy_primitives::{Address, B256, U256};
@@ -40,22 +39,12 @@ pub fn new_cache() -> MirrorCache {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-thread_local! {
-    static CURRENT_CACHE: RefCell<Option<MirrorCache>> = const { RefCell::new(None) };
-}
+static GLOBAL_CACHE: LazyLock<MirrorCache> = LazyLock::new(new_cache);
 
-/// Installs a cache for the current thread. Returns the previous cache, if any,
-/// so callers can restore it later (or drop it to clear).
-pub fn install_cache(cache: MirrorCache) -> Option<MirrorCache> {
-    CURRENT_CACHE.with(|c| c.replace(Some(cache)))
-}
-
-/// Returns the current thread's cache, or a fresh isolated one if none is
-/// installed.
+/// Returns the process-wide cache. Shared across all providers / threads —
+/// keccak preimages are universal so cross-contamination is harmless.
 pub fn current_cache() -> MirrorCache {
-    CURRENT_CACHE
-        .with(|c| c.borrow().clone())
-        .unwrap_or_else(new_cache)
+    GLOBAL_CACHE.clone()
 }
 
 #[derive(Debug, Default, Clone)]
