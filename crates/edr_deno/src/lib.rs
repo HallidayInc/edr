@@ -21,7 +21,9 @@ use edr_chain_config::{
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
 use edr_chain_spec_provider::ProviderChainSpec;
-use edr_generic::{ApeChainSpec, ArbChainSpec, GenericChainSpec, APE_PRECOMPILE_STATE_ADDRESS};
+use edr_generic::{
+    ApeChainSpec, ArbChainSpec, GenericChainSpec, TempoChainSpec, APE_PRECOMPILE_STATE_ADDRESS,
+};
 use edr_op::{self, OpChainSpec};
 use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
 use edr_provider::{
@@ -412,6 +414,7 @@ enum Chain {
     Generic,
     Arb,
     Ape,
+    Tempo,
 }
 
 impl Default for Chain {
@@ -838,6 +841,7 @@ enum ProviderEntry {
     Generic(Arc<Provider<GenericChainSpec>>),
     Arb(Arc<Provider<ArbChainSpec>>),
     Ape(Arc<Provider<ApeChainSpec>>),
+    Tempo(Arc<Provider<TempoChainSpec>>),
 }
 
 impl Clone for ProviderEntry {
@@ -848,6 +852,7 @@ impl Clone for ProviderEntry {
             Self::Generic(p) => Self::Generic(Arc::clone(p)),
             Self::Arb(p) => Self::Arb(Arc::clone(p)),
             Self::Ape(p) => Self::Ape(Arc::clone(p)),
+            Self::Tempo(p) => Self::Tempo(Arc::clone(p)),
         }
     }
 }
@@ -1409,6 +1414,100 @@ pub fn provider_new(
                 Err(_) => return 0,
             }
         }
+        Chain::Tempo => {
+            let fork = fork_opts.as_ref().map(|f| {
+                let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
+                    HashMap::default();
+                if let Some(chains) = &opts.chains {
+                    chain_overrides = self::chain_overrides(chains, parse_l1_spec_id);
+                }
+                edr_provider::ForkConfig {
+                    block_number: f.block_number,
+                    cache_dir: opts
+                        .cache_dir
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    chain_overrides,
+                    http_headers: f.http_headers.as_ref().map(|h| {
+                        h.iter()
+                            .map(|h| (h.name.clone(), h.value.clone()))
+                            .collect::<std::collections::HashMap<_, _>>()
+                    }),
+                    url: f.json_rpc_url.clone(),
+                }
+            });
+            let mut cfg = if fork.is_some() {
+                test_utils::create_test_config_with_fork::<l1::Hardfork>(fork)
+            } else {
+                test_utils::create_test_config::<l1::Hardfork>()
+            };
+            if let Some(v) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = v;
+            }
+            if let Some(v) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = v;
+            }
+            if let Some(v) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = v;
+            }
+            if let Some(v) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = v;
+            }
+            if let Some(v) = opts.block_gas_limit {
+                if let Some(nz) = NonZeroU64::new(v) {
+                    cfg.block_gas_limit = nz;
+                }
+            }
+            if let Some(v) = opts.min_gas_price {
+                cfg.min_gas_price = v;
+            }
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
+            if let Some(ref name) = opts.hardfork {
+                if let Some(spec) = parse_l1_spec_id(name) {
+                    cfg.hardfork = spec;
+                }
+            }
+            if let Some(chains) = &opts.chains {
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_l1_spec_id));
+            }
+            if !cfg.chain_overrides.contains_key(&cfg.chain_id)
+                && let Some(acts) = default_l1_activations()
+            {
+                insert_default_l1_activations(&mut cfg.chain_overrides, cfg.chain_id, &acts);
+            }
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                cfg.chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
+            if !owned_accounts.is_empty() {
+                cfg.owned_accounts = owned_accounts.clone();
+            }
+            if !genesis_state.is_empty() {
+                cfg.genesis_state.extend(genesis_state.clone());
+            }
+            match Provider::<TempoChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(FfiLogger::new(id, log_cb, decode_cb, log_enabled != 0)),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(p) => ProviderEntry::Tempo(Arc::new(p)),
+                Err(_) => return 0,
+            }
+        }
     };
 
     PROVIDERS.lock().unwrap().insert(id, entry);
@@ -1589,6 +1688,37 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
+        ProviderEntry::Tempo(provider) => {
+            let req: edr_provider::requests::ProviderRequest<TempoChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(error) => {
+                        let msg = error.to_string();
+                        let value = serde_json::Value::from_str(request).ok();
+                        let method = value
+                            .as_ref()
+                            .and_then(|v| v.get("method"))
+                            .and_then(serde_json::Value::as_str);
+                        let reason = InvalidRequestReason::new(method, &msg);
+                        if let Some((name, provider_error)) =
+                            reason.provider_error::<TempoChainSpec, CurrentTime>()
+                        {
+                            let _ = provider.log_failed_deserialization(name, &provider_error);
+                        }
+                        let err = jsonrpc::ResponseData::<()>::Error {
+                            error: jsonrpc::Error {
+                                code: reason.error_code(),
+                                message: reason.error_message(),
+                                data: value,
+                            },
+                        };
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
+            let result = provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
+            serde_json::to_string(&response).unwrap()
+        }
     }
 }
 
@@ -1602,6 +1732,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Arb(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Ape(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Tempo(p) => p.set_verbose_tracing(enabled != 0),
         }
     }
 }

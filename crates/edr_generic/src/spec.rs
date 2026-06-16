@@ -34,13 +34,13 @@ use edr_state_api::StateDiff;
 
 use crate::{
     eip2718::TypedEnvelope,
-    precompiles::{ApePrecompiles, ArbPrecompiles},
+    precompiles::{ApePrecompiles, ArbPrecompiles, TempoPrecompiles},
     receipt::GenericExecutionReceiptBuilder,
     rpc::{
         block::GenericRpcBlock, receipt::GenericRpcTransactionReceipt,
         transaction::GenericRpcTransactionWithSignature,
     },
-    ApeChainSpec, ArbChainSpec, GenericChainSpec,
+    ApeChainSpec, ArbChainSpec, GenericChainSpec, TempoChainSpec,
 };
 
 pub struct HeaderAndEvmSpecWithFallback<'header, BlockHeaderT: BlockEnvForHardfork<EvmSpecId>> {
@@ -749,6 +749,215 @@ impl RpcChainSpec for ApeChainSpec {
 }
 
 impl<TimerT: Clone + TimeSinceEpoch> ProviderSpec<TimerT> for ApeChainSpec {
+    type PooledTransaction = edr_chain_l1::L1PooledTransaction;
+    type TransactionRequest = crate::transaction::GenericTransactionRequest<Self>;
+
+    fn cast_halt_reason(reason: Self::HaltReason) -> TransactionFailureReason<Self::HaltReason> {
+        <L1ChainSpec as ProviderSpec<TimerT>>::cast_halt_reason(reason)
+    }
+}
+
+impl BlockChainSpec for TempoChainSpec {
+    type Block =
+        dyn SyncBlock<Arc<Self::Receipt>, Self::SignedTransaction, Error = Self::FetchReceiptError>;
+
+    type BlockBuilder<'builder, BlockchainErrorT: 'builder + std::error::Error> = EthBlockBuilder<
+        'builder,
+        Self::Receipt,
+        Self::Block,
+        BlockchainErrorT,
+        Self,
+        Self::ExecutionReceiptBuilder,
+        Self,
+        Self::LocalBlock,
+    >;
+
+    type FetchReceiptError =
+        FetchRemoteReceiptError<<Self::Receipt as TryFrom<Self::RpcReceipt>>::Error>;
+}
+
+impl BlockEnvChainSpec for TempoChainSpec {
+    type BlockEnv<'header, BlockHeaderT>
+        = HeaderAndEvmSpecWithFallback<'header, BlockHeaderT>
+    where
+        BlockHeaderT: 'header + BlockEnvForHardfork<Self::Hardfork>;
+}
+
+impl ChainSpec for TempoChainSpec {
+    type HaltReason = edr_chain_l1::HaltReason;
+    type SignedTransaction = crate::transaction::SignedTransactionWithFallbackToPostEip155;
+}
+
+impl ContextChainSpec for TempoChainSpec {
+    type Context = edr_mirror::MirrorContext;
+}
+
+impl EvmChainSpec for TempoChainSpec {
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> = TempoPrecompiles;
+
+    fn dry_run<
+        BlockT: BlockEnvTrait,
+        DatabaseT: Database,
+        PrecompileProviderT: PrecompileProvider<
+            ContextForChainSpec<Self, BlockT, DatabaseT>,
+            Output = InterpreterResult,
+        >,
+    >(
+        block: BlockT,
+        cfg: CfgEnv<Self::Hardfork>,
+        transaction: Self::SignedTransaction,
+        database: DatabaseT,
+        precompile_provider: PrecompileProviderT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
+    ) -> Result<
+        ExecutionResultAndState<Self::HaltReason>,
+        TransactionError<
+            DatabaseT::Error,
+            <Self::SignedTransaction as TransactionValidation>::ValidationError,
+        >,
+    > {
+        let context = Context {
+            block,
+            tx: transaction,
+            journaled_state: Journal::new(database),
+            cfg,
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
+            local: LocalContext::default(),
+            error: Ok(()),
+        };
+
+        let mut evm = Evm::new(
+            context,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
+
+        evm.replay().map_err(TransactionError::from)
+    }
+
+    fn dry_run_with_inspector<
+        BlockT: BlockEnvTrait,
+        DatabaseT: Database,
+        InspectorT: Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
+        PrecompileProviderT: PrecompileProvider<
+            ContextForChainSpec<Self, BlockT, DatabaseT>,
+            Output = InterpreterResult,
+        >,
+    >(
+        block: BlockT,
+        cfg: CfgEnv<Self::Hardfork>,
+        transaction: Self::SignedTransaction,
+        database: DatabaseT,
+        precompile_provider: PrecompileProviderT,
+        inspector: InspectorT,
+        mirror_config: Option<edr_chain_config::NativeTokenMirror>,
+    ) -> Result<
+        ExecutionResultAndState<Self::HaltReason>,
+        TransactionError<
+            DatabaseT::Error,
+            <Self::SignedTransaction as TransactionValidation>::ValidationError,
+        >,
+    > {
+        let context = Context {
+            block,
+            tx: Self::SignedTransaction::default(),
+            cfg,
+            journaled_state: Journal::new(database),
+            chain: edr_mirror::MirrorContext::new(mirror_config.clone()),
+            local: LocalContext::default(),
+            error: Ok(()),
+        };
+
+        let mut evm = Evm::new_with_inspector(
+            context,
+            inspector,
+            edr_mirror::build_instructions(),
+            precompile_provider,
+        );
+
+        evm.inspect_tx(transaction).map_err(TransactionError::from)
+    }
+}
+
+impl ExecutionReceiptChainSpec for TempoChainSpec {
+    type ExecutionReceipt<LogT> = TypedEnvelope<edr_receipt::Execution<LogT>>;
+}
+
+impl GenesisBlockFactory for TempoChainSpec {
+    type GenesisBlockCreationError =
+        <L1ChainSpec as GenesisBlockFactory>::GenesisBlockCreationError;
+
+    type LocalBlock = EthLocalBlock<
+        <Self as ReceiptChainSpec>::Receipt,
+        <Self as BlockChainSpec>::FetchReceiptError,
+        Self::Hardfork,
+        <Self as ChainSpec>::SignedTransaction,
+    >;
+
+    fn genesis_block(
+        genesis_diff: StateDiff,
+        block_config: &BlockConfig<Self::Hardfork>,
+        mut options: GenesisBlockOptions<Self::Hardfork>,
+    ) -> Result<Self::LocalBlock, Self::GenesisBlockCreationError> {
+        options.extra_data = Some(
+            options
+                .extra_data
+                .unwrap_or(Bytes::copy_from_slice(L1_GENESIS_BLOCK_EXTRA_DATA)),
+        );
+
+        EthLocalBlock::with_genesis_state(genesis_diff.into(), block_config, options)
+    }
+}
+
+impl HardforkChainSpec for TempoChainSpec {
+    type Hardfork = edr_chain_l1::Hardfork;
+}
+
+impl ProviderChainSpec for TempoChainSpec {
+    const MIN_ETHASH_DIFFICULTY: u64 = L1ChainSpec::MIN_ETHASH_DIFFICULTY;
+
+    fn chain_configs() -> &'static HashMap<u64, ChainConfig<Self::Hardfork>> {
+        L1ChainSpec::chain_configs()
+    }
+
+    fn default_base_fee_params() -> &'static BaseFeeParams<Self::Hardfork> {
+        L1ChainSpec::default_base_fee_params()
+    }
+
+    fn next_base_fee_per_gas(
+        header: &BlockHeader,
+        hardfork: Self::Hardfork,
+        default_base_fee_params: &BaseFeeParams<Self::Hardfork>,
+    ) -> u128 {
+        L1ChainSpec::next_base_fee_per_gas(header, hardfork, default_base_fee_params)
+    }
+
+    fn default_schedulded_blob_params() -> Option<ScheduledBlobParams> {
+        L1ChainSpec::default_schedulded_blob_params()
+    }
+}
+
+impl ReceiptChainSpec for TempoChainSpec {
+    type ExecutionReceiptBuilder = GenericExecutionReceiptBuilder;
+
+    type Receipt = L1BlockReceipt<<Self as ExecutionReceiptChainSpec>::ExecutionReceipt<FilterLog>>;
+}
+
+impl RpcBlockChainSpec for TempoChainSpec {
+    type RpcBlock<DataT>
+        = GenericRpcBlock<DataT>
+    where
+        DataT: serde::de::DeserializeOwned + serde::Serialize;
+}
+
+impl RpcChainSpec for TempoChainSpec {
+    type RpcCallRequest = L1CallRequest;
+    type RpcReceipt = GenericRpcTransactionReceipt;
+    type RpcTransaction = GenericRpcTransactionWithSignature;
+    type RpcTransactionRequest = L1RpcTransactionRequest;
+}
+
+impl<TimerT: Clone + TimeSinceEpoch> ProviderSpec<TimerT> for TempoChainSpec {
     type PooledTransaction = edr_chain_l1::L1PooledTransaction;
     type TransactionRequest = crate::transaction::GenericTransactionRequest<Self>;
 

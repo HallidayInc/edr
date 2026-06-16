@@ -121,6 +121,64 @@ use self::{
     },
 };
 
+/// Tempo's stablecoin DEX precompile address.
+const TEMPO_DEX_ADDRESS: Address = address!("dec0000000000000000000000000000000000000");
+
+sol! {
+    interface Tip20 {
+        function balanceOf(address account) external view returns (uint256);
+        function transfer(address to, uint256 amount) external returns (bool);
+        function transferFrom(address from, address to, uint256 amount) external returns (bool);
+        function approve(address spender, uint256 amount) external returns (bool);
+        function allowance(address owner, address spender) external view returns (uint256);
+        function decimals() external view returns (uint8);
+        function totalSupply() external view returns (uint256);
+    }
+
+    interface TempoDexAbi {
+        function quoteSwapExactAmountIn(address tokenIn, address tokenOut, uint128 amountIn) external view returns (uint128);
+        function quoteSwapExactAmountOut(address tokenIn, address tokenOut, uint128 amountOut) external view returns (uint128);
+        function swapExactAmountIn(address tokenIn, address tokenOut, uint128 amountIn, uint128 minAmountOut) external returns (uint128);
+        function swapExactAmountOut(address tokenIn, address tokenOut, uint128 amountOut, uint128 maxAmountIn) external returns (uint128);
+    }
+}
+
+use self::{
+    Tip20::{
+        allowanceCall, approveCall, balanceOfCall, decimalsCall, totalSupplyCall, transferCall,
+        transferFromCall,
+    },
+    TempoDexAbi::{
+        quoteSwapExactAmountInCall, quoteSwapExactAmountOutCall, swapExactAmountInCall,
+        swapExactAmountOutCall,
+    },
+};
+
+/// Tempo's TIP-20 tokens are predeployed at addresses prefixed with `0x20c0`.
+fn is_tip20(address: &Address) -> bool {
+    let bytes = address.as_slice();
+    bytes[0] == 0x20 && bytes[1] == 0xc0
+}
+
+/// Storage slot of `balances[holder]` for a standard `mapping(address => uint256)` at slot 0.
+fn tip20_balance_slot(holder: Address) -> U256 {
+    let mut buf = [0u8; 64];
+    buf[12..32].copy_from_slice(holder.as_slice());
+    U256::from_be_bytes(keccak256(buf).0)
+}
+
+/// Storage slot of `allowances[owner][spender]` for `mapping(address => mapping(address => uint256))` at slot 1.
+fn tip20_allowance_slot(owner: Address, spender: Address) -> U256 {
+    let mut inner = [0u8; 64];
+    inner[12..32].copy_from_slice(owner.as_slice());
+    inner[63] = 1;
+    let inner_hash = keccak256(inner);
+    let mut outer = [0u8; 64];
+    outer[12..32].copy_from_slice(spender.as_slice());
+    outer[32..64].copy_from_slice(inner_hash.as_slice());
+    U256::from_be_bytes(keccak256(outer).0)
+}
+
 /// Arbitrum precompile provider.
 ///
 /// This keeps Ethereum's built-in precompiles and layers in Arbitrum's Nitro
@@ -218,6 +276,255 @@ where
     fn contains(&self, address: &Address) -> bool {
         <ArbPrecompiles as PrecompileProvider<ContextT>>::contains(&self.inner, address)
     }
+}
+
+/// Tempo precompile provider.
+///
+/// Tempo's TIP-20 tokens (`0x20c0…`) and stablecoin DEX (`0xdec0`) are
+/// node-native precompiles whose on-chain code is a `0xef` placeholder, so a
+/// standard EVM fork cannot execute them. This models them for fork simulation:
+/// TIP-20s as storage-backed ERC-20s (balances at the slot-0 mapping) and the
+/// DEX as a 1:1 stablecoin swap that moves those balances.
+#[derive(Debug, Clone, Default)]
+pub struct TempoPrecompiles {
+    inner: EthPrecompiles,
+}
+
+impl<ContextT> PrecompileProvider<ContextT> for TempoPrecompiles
+where
+    ContextT: ContextTrait,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
+        <EthPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec)
+    }
+
+    fn run(
+        &mut self,
+        context: &mut ContextT,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        if inputs.bytecode_address == TEMPO_DEX_ADDRESS {
+            return run_tempo_dex(context, inputs).map(Some);
+        }
+
+        if is_tip20(&inputs.bytecode_address) {
+            return run_tip20(context, inputs).map(Some);
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+        Box::new(self.inner.warm_addresses().chain([TEMPO_DEX_ADDRESS]))
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        *address == TEMPO_DEX_ADDRESS || is_tip20(address) || self.inner.contains(address)
+    }
+}
+
+/// Move `amount` of TIP-20 `token` from `from` to `to`. Returns `Ok(false)` if
+/// `from`'s balance is insufficient (the caller should revert).
+fn tip20_move<ContextT>(
+    context: &mut ContextT,
+    token: Address,
+    from: Address,
+    to: Address,
+    amount: U256,
+) -> Result<bool, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let from_slot = tip20_balance_slot(from);
+    let from_balance = read_word_at(context, token, from_slot)?;
+    if from_balance < amount {
+        return Ok(false);
+    }
+    write_word_at(context, token, from_slot, from_balance - amount)?;
+
+    let to_slot = tip20_balance_slot(to);
+    let to_balance = read_word_at(context, token, to_slot)?;
+    write_word_at(context, token, to_slot, to_balance.saturating_add(amount))?;
+
+    Ok(true)
+}
+
+fn run_tip20<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let token = inputs.bytecode_address;
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(inputs, "TIP20: missing selector"));
+    }
+
+    let selector = &calldata[..4];
+
+    if selector == balanceOfCall::SELECTOR {
+        let Ok(call) = balanceOfCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TIP20: invalid calldata"));
+        };
+        let balance = read_word_at(context, token, tip20_balance_slot(call.account))?;
+        return Ok(success(inputs, balance.abi_encode()));
+    }
+
+    if selector == decimalsCall::SELECTOR {
+        return Ok(success(inputs, U256::from(6).abi_encode()));
+    }
+
+    if selector == totalSupplyCall::SELECTOR {
+        return Ok(success(inputs, U256::ZERO.abi_encode()));
+    }
+
+    if selector == allowanceCall::SELECTOR {
+        let Ok(call) = allowanceCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TIP20: invalid calldata"));
+        };
+        let value = read_word_at(context, token, tip20_allowance_slot(call.owner, call.spender))?;
+        return Ok(success(inputs, value.abi_encode()));
+    }
+
+    if selector == approveCall::SELECTOR {
+        let Ok(call) = approveCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TIP20: invalid calldata"));
+        };
+        write_word_at(
+            context,
+            token,
+            tip20_allowance_slot(inputs.caller, call.spender),
+            call.amount,
+        )?;
+        return Ok(success(inputs, true.abi_encode()));
+    }
+
+    if selector == transferCall::SELECTOR {
+        let Ok(call) = transferCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TIP20: invalid calldata"));
+        };
+        if !tip20_move(context, token, inputs.caller, call.to, call.amount)? {
+            return Ok(revert_with_message(inputs, "TIP20: insufficient balance"));
+        }
+        return Ok(success(inputs, true.abi_encode()));
+    }
+
+    if selector == transferFromCall::SELECTOR {
+        let Ok(call) = transferFromCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TIP20: invalid calldata"));
+        };
+        let allowance_slot = tip20_allowance_slot(call.from, inputs.caller);
+        let allowed = read_word_at(context, token, allowance_slot)?;
+        if allowed < call.amount {
+            return Ok(revert_with_message(inputs, "TIP20: insufficient allowance"));
+        }
+        if allowed != U256::MAX {
+            write_word_at(context, token, allowance_slot, allowed - call.amount)?;
+        }
+        if !tip20_move(context, token, call.from, call.to, call.amount)? {
+            return Ok(revert_with_message(inputs, "TIP20: insufficient balance"));
+        }
+        return Ok(success(inputs, true.abi_encode()));
+    }
+
+    Ok(revert_with_message(inputs, "TIP20: unknown selector"))
+}
+
+fn run_tempo_dex<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(inputs, "TempoDex: missing selector"));
+    }
+
+    let selector = &calldata[..4];
+
+    // 1:1 quotes for same-decimal stablecoins.
+    if selector == quoteSwapExactAmountInCall::SELECTOR {
+        let Ok(call) = quoteSwapExactAmountInCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TempoDex: invalid calldata"));
+        };
+        return Ok(success(inputs, call.amountIn.abi_encode()));
+    }
+
+    if selector == quoteSwapExactAmountOutCall::SELECTOR {
+        let Ok(call) = quoteSwapExactAmountOutCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TempoDex: invalid calldata"));
+        };
+        return Ok(success(inputs, call.amountOut.abi_encode()));
+    }
+
+    if selector == swapExactAmountInCall::SELECTOR {
+        let Ok(call) = swapExactAmountInCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TempoDex: invalid calldata"));
+        };
+        if call.amountIn < call.minAmountOut {
+            return Ok(revert_with_message(inputs, "TempoDex: insufficient output"));
+        }
+        let amount = U256::from(call.amountIn);
+        if !tempo_dex_swap(context, call.tokenIn, call.tokenOut, inputs.caller, amount)? {
+            return Ok(revert_with_message(inputs, "TempoDex: insufficient input"));
+        }
+        return Ok(success(inputs, call.amountIn.abi_encode()));
+    }
+
+    if selector == swapExactAmountOutCall::SELECTOR {
+        let Ok(call) = swapExactAmountOutCall::abi_decode(calldata) else {
+            return Ok(revert_with_message(inputs, "TempoDex: invalid calldata"));
+        };
+        if call.amountOut > call.maxAmountIn {
+            return Ok(revert_with_message(inputs, "TempoDex: excessive input"));
+        }
+        let amount = U256::from(call.amountOut);
+        if !tempo_dex_swap(context, call.tokenIn, call.tokenOut, inputs.caller, amount)? {
+            return Ok(revert_with_message(inputs, "TempoDex: insufficient input"));
+        }
+        return Ok(success(inputs, call.amountOut.abi_encode()));
+    }
+
+    Ok(revert_with_message(inputs, "TempoDex: unknown selector"))
+}
+
+/// Debit `amount` of `token_in` from `account` and credit the same amount of
+/// `token_out` (1:1). Returns `Ok(false)` if the input balance is insufficient.
+fn tempo_dex_swap<ContextT>(
+    context: &mut ContextT,
+    token_in: Address,
+    token_out: Address,
+    account: Address,
+    amount: U256,
+) -> Result<bool, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let slot = tip20_balance_slot(account);
+    let in_balance = read_word_at(context, token_in, slot)?;
+    if in_balance < amount {
+        return Ok(false);
+    }
+    write_word_at(context, token_in, slot, in_balance - amount)?;
+
+    let out_balance = read_word_at(context, token_out, slot)?;
+    write_word_at(context, token_out, slot, out_balance.saturating_add(amount))?;
+
+    Ok(true)
 }
 
 fn run_ape_arbinfo<ContextT>(
