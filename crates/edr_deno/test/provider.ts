@@ -1160,6 +1160,36 @@ Deno.test("ape fork WAPE calls match remote ApeChain", async () => {
     assertEquals(localWithdraw, remoteWithdraw);
 });
 
+Deno.test("tempo provider exposes TIP-20 and DEX precompiles", async () => {
+    const tokenIn = "0x20c0000000000000000000000000000000000001";
+    const tokenOut = "0x20c0000000000000000000000000000000000002";
+    const dex = "0xdec0000000000000000000000000000000000000";
+    const amount = 123_456n;
+
+    using ctx = new Context();
+    using tempo = ctx.createProvider({
+        chain: "tempo",
+        chainId: 4217n,
+        networkId: 4217n,
+        hardfork: "prague",
+    });
+
+    const decimals = await request(tempo, {
+        method: "eth_call",
+        params: [{ to: tokenIn, data: selector("decimals()") }, "latest"],
+    });
+    assertEquals(decodeFirstWord(decimals), 6n);
+
+    const quote = await request(tempo, {
+        method: "eth_call",
+        params: [{
+            to: dex,
+            data: `${selector("quoteSwapExactAmountIn(address,address,uint128)")}${encodeAddressArg(tokenIn)}${encodeAddressArg(tokenOut)}${encodeUintArg(amount)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(quote), amount);
+});
+
 Deno.test("transaction logging details", async () => {
     const logs: string[] = [];
     using ctx = new Context();

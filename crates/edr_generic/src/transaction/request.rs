@@ -293,3 +293,4 @@ macro_rules! impl_from_rpc_type {
 impl_from_rpc_type!(crate::GenericChainSpec);
 impl_from_rpc_type!(crate::ArbChainSpec);
 impl_from_rpc_type!(crate::ApeChainSpec);
+impl_from_rpc_type!(crate::TempoChainSpec);

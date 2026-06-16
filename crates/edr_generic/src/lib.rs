@@ -43,11 +43,15 @@ pub struct ArbChainSpec;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct ApeChainSpec;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
+pub struct TempoChainSpec;
+
 pub trait GenericChainSpecFamily: Copy + Default {}
 
 impl GenericChainSpecFamily for GenericChainSpec {}
 impl GenericChainSpecFamily for ArbChainSpec {}
 impl GenericChainSpecFamily for ApeChainSpec {}
+impl GenericChainSpecFamily for TempoChainSpec {}
 
 impl edr_utils::GasEstimateAdjuster for GenericChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
@@ -66,6 +70,12 @@ impl edr_utils::GasEstimateAdjuster for ArbChainSpec {
 impl edr_utils::GasEstimateAdjuster for ApeChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
         <ArbChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
+    }
+}
+
+impl edr_utils::GasEstimateAdjuster for TempoChainSpec {
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
     }
 }
 
