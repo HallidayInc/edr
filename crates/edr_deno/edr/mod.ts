@@ -8,6 +8,7 @@ const dylib = Deno.dlopen(resolveLib(), {
     context_new: { parameters: [], result: "u32" },
     context_drop: { parameters: ["u32"], result: "void" },
     version: { parameters: [], result: "pointer" },
+    provider_last_creation_error: { parameters: [], result: "pointer" },
     provider_new: {
         parameters: ["u32", "pointer", "usize", "pointer", "pointer", "u8"],
         result: "u32",
@@ -97,6 +98,11 @@ export function version(): string {
     return decode(ptr);
 }
 
+export function provider_last_creation_error(): string {
+    const ptr = dylib.symbols.provider_last_creation_error();
+    return decode(ptr);
+}
+
 export function provider_new(
     ctx: number,
     config: string,
@@ -167,9 +173,15 @@ export class Context {
             globalDecodeCb.pointer,
             enabled ? 1 : 0,
         );
+        if (id === 0) {
+            const message = provider_last_creation_error() ||
+                "unknown provider creation error";
+            throw new Error(`Failed to create EDR provider: ${message}`);
+        }
         loggerMap.set(id, {
             printLineCallback: logger?.printLineCallback,
-            decodeConsoleLogInputsCallback: logger?.decodeConsoleLogInputsCallback,
+            decodeConsoleLogInputsCallback: logger
+                ?.decodeConsoleLogInputsCallback,
         });
         return new Provider(id);
     }

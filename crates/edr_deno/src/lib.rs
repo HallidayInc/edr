@@ -855,6 +855,7 @@ impl Clone for ProviderEntry {
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static PROVIDERS: Lazy<Mutex<HashMap<u32, ProviderEntry>>> =
     Lazy::new(|| Mutex::new(HashMap::default()));
+static LAST_PROVIDER_CREATION_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 static NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static CONTEXTS: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 static RUNTIME: OnceCell<Runtime> = OnceCell::new();
@@ -883,6 +884,27 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+fn clear_provider_creation_error() {
+    *LAST_PROVIDER_CREATION_ERROR.lock().unwrap() = None;
+}
+
+fn fail_provider_new(error: impl Into<String>) -> u32 {
+    let error = error.into();
+    eprintln!("Failed to create EDR provider: {error}");
+    *LAST_PROVIDER_CREATION_ERROR.lock().unwrap() = Some(error);
+    0
+}
+
+/// Returns the last error that occurred while creating a provider.
+#[deno_bindgen]
+pub fn provider_last_creation_error() -> String {
+    LAST_PROVIDER_CREATION_ERROR
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_default()
+}
+
 /// Creates a new provider within the provided context using the given JSON
 /// configuration.
 #[deno_bindgen]
@@ -893,8 +915,10 @@ pub fn provider_new(
     decode_cb: usize,
     log_enabled: u8,
 ) -> u32 {
+    clear_provider_creation_error();
+
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
-        return 0;
+        return fail_provider_new(format!("invalid context id: {context_id}"));
     }
 
     let opts: ProviderOptions = if config_json.trim().is_empty() {
@@ -902,7 +926,11 @@ pub fn provider_new(
     } else {
         match serde_json::from_str(config_json) {
             Ok(c) => c,
-            Err(_) => return 0,
+            Err(error) => {
+                return fail_provider_new(format!(
+                    "invalid provider configuration JSON: {error}"
+                ));
+            }
         }
     };
 
@@ -912,11 +940,20 @@ pub fn provider_new(
         for acc in list {
             let key = match secret_key_from_hex(&acc.secret_key) {
                 Ok(k) => k,
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!(
+                        "invalid owned account secret key: {error}"
+                    ));
+                }
             };
             let balance = match U256::from_str(&acc.balance) {
                 Ok(b) => b,
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!(
+                        "invalid owned account balance '{}': {error}",
+                        acc.balance
+                    ));
+                }
             };
             let address = public_key_to_address(key.public_key());
             genesis.insert(
@@ -939,7 +976,9 @@ pub fn provider_new(
     let runtime = runtime();
     let contract_decoder = match ContractDecoder::new(&BuildInfoConfig::default()) {
         Ok(d) => Arc::new(RwLock::new(d)),
-        Err(_) => return 0,
+        Err(error) => {
+            return fail_provider_new(format!("failed to create contract decoder: {error}"));
+        }
     };
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -1032,7 +1071,9 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::L1(Arc::new(p)),
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!("failed to create L1 provider: {error}"));
+                }
             }
         }
         Chain::Op => {
@@ -1123,7 +1164,9 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Op(Arc::new(p)),
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!("failed to create OP provider: {error}"));
+                }
             }
         }
         Chain::Generic => {
@@ -1217,7 +1260,9 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Generic(Arc::new(p)),
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!("failed to create generic provider: {error}"));
+                }
             }
         }
         Chain::Arb => {
@@ -1311,7 +1356,11 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Arb(Arc::new(p)),
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!(
+                        "failed to create Arbitrum provider: {error}"
+                    ));
+                }
             }
         }
         Chain::Ape => {
@@ -1406,7 +1455,9 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Ape(Arc::new(p)),
-                Err(_) => return 0,
+                Err(error) => {
+                    return fail_provider_new(format!("failed to create Ape provider: {error}"));
+                }
             }
         }
     };
