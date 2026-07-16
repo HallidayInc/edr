@@ -899,6 +899,7 @@ pub fn provider_new(
     log_enabled: u8,
 ) -> u32 {
     if !CONTEXTS.lock().unwrap().contains(&context_id) {
+        eprintln!("edr: provider_new failed: unknown context id {context_id}");
         return 0;
     }
 
@@ -907,7 +908,10 @@ pub fn provider_new(
     } else {
         match serde_json::from_str(config_json) {
             Ok(c) => c,
-            Err(_) => return 0,
+            Err(err) => {
+                eprintln!("edr: provider_new failed: invalid config JSON: {err:?}");
+                return 0;
+            }
         }
     };
 
@@ -917,11 +921,19 @@ pub fn provider_new(
         for acc in list {
             let key = match secret_key_from_hex(&acc.secret_key) {
                 Ok(k) => k,
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed: invalid owned account secret key: {err:?}"
+                    );
+                    return 0;
+                }
             };
             let balance = match U256::from_str(&acc.balance) {
                 Ok(b) => b,
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!("edr: provider_new failed: invalid owned account balance: {err:?}");
+                    return 0;
+                }
             };
             let address = public_key_to_address(key.public_key());
             genesis.insert(
@@ -944,7 +956,10 @@ pub fn provider_new(
     let runtime = runtime();
     let contract_decoder = match ContractDecoder::new(&BuildInfoConfig::default()) {
         Ok(d) => Arc::new(RwLock::new(d)),
-        Err(_) => return 0,
+        Err(err) => {
+            eprintln!("edr: provider_new failed: contract decoder creation: {err:?}");
+            return 0;
+        }
     };
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
@@ -1037,7 +1052,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::L1(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=l1, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
         Chain::Op => {
@@ -1128,7 +1149,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Op(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=op, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
         Chain::Generic => {
@@ -1222,7 +1249,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Generic(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=generic, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
         Chain::Arb => {
@@ -1316,7 +1349,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Arb(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=arb, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
         Chain::Ape => {
@@ -1411,7 +1450,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Ape(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=ape, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
         Chain::Tempo => {
@@ -1505,7 +1550,13 @@ pub fn provider_new(
                 CurrentTime,
             ) {
                 Ok(p) => ProviderEntry::Tempo(Arc::new(p)),
-                Err(_) => return 0,
+                Err(err) => {
+                    eprintln!(
+                        "edr: provider_new failed (chain=tempo, chain_id={:?}): {err:?}",
+                        opts.chain_id
+                    );
+                    return 0;
+                }
             }
         }
     };
