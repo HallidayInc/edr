@@ -37,7 +37,7 @@ use crate::{
     precompiles::{ApePrecompiles, ArbPrecompiles, TempoPrecompiles},
     receipt::GenericExecutionReceiptBuilder,
     rpc::{
-        block::GenericRpcBlock, receipt::GenericRpcTransactionReceipt,
+        block::GenericRpcBlock, receipt::GenericRpcTransactionReceipt, tempo::TempoRpcTransaction,
         transaction::GenericRpcTransactionWithSignature,
     },
     ApeChainSpec, ArbChainSpec, GenericChainSpec, TempoChainSpec,
@@ -953,7 +953,7 @@ impl RpcBlockChainSpec for TempoChainSpec {
 impl RpcChainSpec for TempoChainSpec {
     type RpcCallRequest = L1CallRequest;
     type RpcReceipt = GenericRpcTransactionReceipt;
-    type RpcTransaction = GenericRpcTransactionWithSignature;
+    type RpcTransaction = TempoRpcTransaction;
     type RpcTransactionRequest = L1RpcTransactionRequest;
 }
 
