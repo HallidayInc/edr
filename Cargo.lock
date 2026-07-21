@@ -3496,6 +3496,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
+ "tempo-hardfork",
  "tokio",
 ]
 
