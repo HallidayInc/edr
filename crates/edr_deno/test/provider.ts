@@ -876,6 +876,110 @@ Deno.test("native token mirror preserves unrelated token storage after mining", 
     assertEquals(accountAStorageAfter, accountAStorageBefore);
 });
 
+Deno.test("Tempo fork executes the native TIP-20 implementation against historical state", async () => {
+    const blockNumber = 27_465_728n;
+    const pathUsd = "0x20c0000000000000000000000000000000000000";
+
+    using ctx = new Context();
+    using tempo = ctx.createProvider({
+        chain: "tempo",
+        chainId: 42_431n,
+        networkId: 42_431n,
+        fork: {
+            jsonRpcUrl: "https://rpc.moderato.tempo.xyz",
+            blockNumber,
+        },
+    });
+
+    const forkBlock = await request(tempo, {
+        method: "eth_getBlockByNumber",
+        params: ["latest", false],
+    });
+    assertEquals(
+        forkBlock.hash,
+        "0xf7de620405725fd9454f389801c0fe83f4a1fafc8d6456ef440a43087aeccdb3",
+    );
+    const nativeReceipt = await request(tempo, {
+        method: "eth_getTransactionReceipt",
+        params: [
+            "0x02d7b390f6f4378f164c721349e146a5ec6c8f6f811bc8a7da4599b564d54030",
+        ],
+    });
+    assertEquals(nativeReceipt.type, "0x76");
+    assertEquals(
+        nativeReceipt.feePayer,
+        "0x5bc1473610754a5ca10749552b119df90c1a1877",
+    );
+    assertEquals(
+        nativeReceipt.feeToken,
+        "0x20c0000000000000000000000000000000000001",
+    );
+
+    assertEquals(
+        await request(tempo, {
+            method: "eth_call",
+            params: [{ to: pathUsd, data: selector("name()") }, "latest"],
+        }),
+        "0x0000000000000000000000000000000000000000000000000000000000000020" +
+            "0000000000000000000000000000000000000000000000000000000000000007" +
+            "5061746855534400000000000000000000000000000000000000000000000000",
+    );
+});
+
+Deno.test("Tempo estimate includes explicit fee-token execution", async () => {
+    // Immediately before
+    // 0xcb6ff5c5b7faae59f1f61c922575fb3ea913b67cdcbb97495fca9a2748ca6aea,
+    // which transferred AlphaUSD while paying fees in PathUSD. The transaction
+    // used 0xd59a gas; omitting feeToken on the upstream estimate produced only
+    // 0xd0e2 because it simulated AlphaUSD in-kind fee payment instead.
+    const blockNumber = 27_466_936n;
+    const sender = "0x294697c84784d9fad78dd73eb609c9e79b7939b2";
+    const pathUsd = "0x20c0000000000000000000000000000000000000";
+    const alphaUsd = "0x20c0000000000000000000000000000000000001";
+
+    using ctx = new Context();
+    using tempo = ctx.createProvider({
+        chain: "tempo",
+        chainId: 42_431n,
+        networkId: 42_431n,
+        fork: {
+            jsonRpcUrl: "https://rpc.moderato.tempo.xyz",
+            blockNumber,
+        },
+    });
+
+    const requestWithoutFeeToken = {
+        from: sender,
+        to: alphaUsd,
+        data: "0xa9059cbb000000000000000000000000390f058d316c556874ef2d62d7752c09846940fb0000000000000000000000000000000000000000000000000000000002faf080",
+        maxPriorityFeePerGas: "0x10f50aef",
+        maxFeePerGas: "0x587b96ef",
+    };
+    const inferredFeeEstimate = BigInt(await request(tempo, {
+        method: "eth_estimateGas",
+        params: [requestWithoutFeeToken],
+    }));
+    const explicitFeeEstimate = BigInt(await request(tempo, {
+        method: "eth_estimateGas",
+        params: [{ ...requestWithoutFeeToken, feeToken: pathUsd }],
+    }));
+
+    assert(explicitFeeEstimate > inferredFeeEstimate);
+    assert(explicitFeeEstimate >= 0xd59an);
+    await assertRejects(
+        () =>
+            request(tempo, {
+                method: "eth_estimateGas",
+                params: [{
+                    ...requestWithoutFeeToken,
+                    feeToken: "0x0000000000000000000000000000000000000001",
+                }],
+            }),
+        Error,
+        "is not a TIP-20 token",
+    );
+});
+
 Deno.test("stable native token mirror lets storage-funded account spend native balance", async () => {
     const token = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736";
     const account = "0x000000000000000000000000000000000000c0De";

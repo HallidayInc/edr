@@ -1,13 +1,17 @@
 //! A slightly more flexible chain specification for Ethereum Layer 1 chain.
 
 use edr_primitives::{address, Address};
+pub use tempo_hardfork::TempoHardfork;
 
 mod eip2718;
 mod precompiles;
 mod receipt;
 mod rpc;
 mod spec;
+mod tempo;
 mod transaction;
+
+pub use transaction::{TempoSignedTransaction, TempoSignedTransactionError};
 
 /// Generic chain type
 pub const CHAIN_TYPE: &str = "generic";
@@ -15,6 +19,8 @@ pub const CHAIN_TYPE: &str = "generic";
 pub const ARB_CHAIN_TYPE: &str = "arb";
 /// ApeChain type
 pub const APE_CHAIN_TYPE: &str = "ape";
+/// Tempo chain type.
+pub const TEMPO_CHAIN_TYPE: &str = "tempo";
 /// Backing account used for Ape-specific precompile state.
 pub const APE_PRECOMPILE_STATE_ADDRESS: Address =
     address!("00000000000000000000000000000000A4E50000");
@@ -43,11 +49,16 @@ pub struct ArbChainSpec;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct ApeChainSpec;
 
+/// Chain specification backed by Tempo's native execution crates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
+pub struct TempoChainSpec;
+
 pub trait GenericChainSpecFamily: Copy + Default {}
 
 impl GenericChainSpecFamily for GenericChainSpec {}
 impl GenericChainSpecFamily for ArbChainSpec {}
 impl GenericChainSpecFamily for ApeChainSpec {}
+impl GenericChainSpecFamily for TempoChainSpec {}
 
 impl edr_utils::GasEstimateAdjuster for GenericChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
@@ -69,9 +80,15 @@ impl edr_utils::GasEstimateAdjuster for ApeChainSpec {
     }
 }
 
+impl edr_utils::GasEstimateAdjuster for TempoChainSpec {
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ApeChainSpec, ArbChainSpec, GenericChainSpec};
+    use super::{ApeChainSpec, ArbChainSpec, GenericChainSpec, TempoChainSpec};
 
     fn adjust_generic(estimate: u64) -> u64 {
         <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
@@ -83,6 +100,10 @@ mod tests {
 
     fn adjust_ape(estimate: u64) -> u64 {
         <ApeChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
+    }
+
+    fn adjust_tempo(estimate: u64) -> u64 {
+        <TempoChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
     }
 
     #[test]
@@ -119,5 +140,11 @@ mod tests {
     fn ape_matches_arb_gas_buffering() {
         let estimate = 500_000;
         assert_eq!(adjust_ape(estimate), adjust_arb(estimate));
+    }
+
+    #[test]
+    fn tempo_matches_generic_gas_buffering() {
+        let estimate = 500_000;
+        assert_eq!(adjust_tempo(estimate), adjust_generic(estimate));
     }
 }

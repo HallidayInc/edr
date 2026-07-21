@@ -19,7 +19,7 @@ pub enum TypedEnvelope<DataT> {
     /// EIP-7702 transaction.
     Eip7702(DataT),
     /// Unrecognized transaction type.
-    Unrecognized(DataT),
+    Unrecognized(u8, DataT),
 }
 
 impl<DataT> TypedEnvelope<DataT> {
@@ -31,7 +31,9 @@ impl<DataT> TypedEnvelope<DataT> {
             transaction::Type::Eip1559 => Self::Eip1559(data),
             transaction::Type::Eip4844 => Self::Eip4844(data),
             transaction::Type::Eip7702 => Self::Eip7702(data),
-            transaction::Type::Unrecognized(_) => Self::Unrecognized(data),
+            transaction::Type::Unrecognized(transaction_type) => {
+                Self::Unrecognized(transaction_type, data)
+            }
         }
     }
 
@@ -43,7 +45,7 @@ impl<DataT> TypedEnvelope<DataT> {
             | TypedEnvelope::Eip1559(data)
             | TypedEnvelope::Eip4844(data)
             | TypedEnvelope::Eip7702(data)
-            | TypedEnvelope::Unrecognized(data) => data,
+            | TypedEnvelope::Unrecognized(_, data) => data,
         }
     }
 
@@ -58,7 +60,9 @@ impl<DataT> TypedEnvelope<DataT> {
             TypedEnvelope::Eip1559(data) => TypedEnvelope::Eip1559(f(data)),
             TypedEnvelope::Eip4844(data) => TypedEnvelope::Eip4844(f(data)),
             TypedEnvelope::Eip7702(data) => TypedEnvelope::Eip7702(f(data)),
-            TypedEnvelope::Unrecognized(data) => TypedEnvelope::Unrecognized(f(data)),
+            TypedEnvelope::Unrecognized(transaction_type, data) => {
+                TypedEnvelope::Unrecognized(transaction_type, f(data))
+            }
         }
     }
 }
@@ -73,8 +77,9 @@ impl<DataT> TransactionType for TypedEnvelope<DataT> {
             TypedEnvelope::Eip1559(_) => transaction::Type::Eip1559,
             TypedEnvelope::Eip4844(_) => transaction::Type::Eip4844,
             TypedEnvelope::Eip7702(_) => transaction::Type::Eip7702,
-            // TODO: Should we properly decode the transaction type?
-            TypedEnvelope::Unrecognized(_) => transaction::Type::Unrecognized(0xFF),
+            TypedEnvelope::Unrecognized(transaction_type, _) => {
+                transaction::Type::Unrecognized(*transaction_type)
+            }
         }
     }
 }
@@ -147,5 +152,19 @@ impl<OldDataT: MapReceiptLogs<OldLogT, NewLogT, NewDataT>, OldLogT, NewLogT, New
 {
     fn map_logs(self, map_fn: impl FnMut(OldLogT) -> NewLogT) -> TypedEnvelope<NewDataT> {
         self.map(|data| data.map_logs(map_fn))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use edr_transaction::TransactionType as _;
+
+    use super::TypedEnvelope;
+    use crate::transaction::Type;
+
+    #[test]
+    fn preserves_unrecognized_transaction_type() {
+        let envelope = TypedEnvelope::new((), Type::Unrecognized(0x76));
+        assert_eq!(envelope.transaction_type(), Type::Unrecognized(0x76));
     }
 }

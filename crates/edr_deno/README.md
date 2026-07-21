@@ -25,7 +25,8 @@ The library exposes a simple context object and provider constructor. The constr
 - `chain`: `"l1"` (default), `"op"` for OP Stack chains like Base, or
 - `"generic"` for custom L1 forks,
 - `"arb"` for Arbitrum-compatible chains, or
-- `"ape"` for ApeChain's Arbitrum-based precompile extensions
+- `"ape"` for ApeChain's Arbitrum-based precompile extensions, or
+- `"tempo"` for Tempo forks backed by Tempo's native execution crates
 - `fork`: `{ jsonRpcUrl, blockNumber?, httpHeaders? }` configuration for forking a remote chain
 - `chainId`: set the provider's chain ID; for forks, set this to the remote chain ID
 - `hardfork`: optional compatibility hardfork for remote and locally mined blocks
