@@ -26,6 +26,7 @@ edr_primitives.workspace = true
 edr_rpc_client.workspace = true
 edr_signer.workspace = true
 edr_solidity.workspace = true
+tempo-hardfork.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 once_cell = "1.19"
 serde_json.workspace = true

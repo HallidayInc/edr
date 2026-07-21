@@ -21,7 +21,10 @@ use edr_chain_config::{
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
 use edr_eip7825::transaction_gas_cap_for_hardfork;
-use edr_generic::{ApeChainSpec, ArbChainSpec, GenericChainSpec, APE_PRECOMPILE_STATE_ADDRESS};
+use edr_generic::{
+    ApeChainSpec, ArbChainSpec, GenericChainSpec, TempoChainSpec, TempoHardfork,
+    APE_PRECOMPILE_STATE_ADDRESS,
+};
 use edr_op::{self, OpChainSpec};
 use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
 use edr_provider::{
@@ -41,6 +44,7 @@ use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
 use serde::{ser::SerializeSeq, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
+use tempo_hardfork::constants::gas::TEMPO_T7_BASE_FEE_FLOOR;
 use tokio::runtime::Runtime;
 
 const APE_ARBOWNERPUBLIC_ADDRESS: &str = "0x000000000000000000000000000000000000006b";
@@ -400,6 +404,26 @@ fn parse_op_spec_id(name: &str) -> Option<edr_op::Hardfork> {
     }
 }
 
+fn parse_tempo_hardfork(name: &str) -> Option<TempoHardfork> {
+    match name.to_ascii_lowercase().as_str() {
+        "genesis" => Some(TempoHardfork::Genesis),
+        "t0" => Some(TempoHardfork::T0),
+        "t1" => Some(TempoHardfork::T1),
+        "t1a" | "t1.a" => Some(TempoHardfork::T1A),
+        "t1b" | "t1.b" => Some(TempoHardfork::T1B),
+        "t1c" | "t1.c" => Some(TempoHardfork::T1C),
+        "t2" => Some(TempoHardfork::T2),
+        "t3" => Some(TempoHardfork::T3),
+        "t4" => Some(TempoHardfork::T4),
+        "t5" => Some(TempoHardfork::T5),
+        "t6" => Some(TempoHardfork::T6),
+        "t7" => Some(TempoHardfork::T7),
+        "t8" => Some(TempoHardfork::T8),
+        "t9" => Some(TempoHardfork::T9),
+        _ => None,
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Chain {
@@ -408,6 +432,7 @@ enum Chain {
     Generic,
     Arb,
     Ape,
+    Tempo,
 }
 
 impl Default for Chain {
@@ -887,6 +912,7 @@ enum ProviderEntry {
     Generic(Arc<Provider<GenericChainSpec>>),
     Arb(Arc<Provider<ArbChainSpec>>),
     Ape(Arc<Provider<ApeChainSpec>>),
+    Tempo(Arc<Provider<TempoChainSpec>>),
 }
 
 impl Clone for ProviderEntry {
@@ -897,6 +923,7 @@ impl Clone for ProviderEntry {
             Self::Generic(p) => Self::Generic(Arc::clone(p)),
             Self::Arb(p) => Self::Arb(Arc::clone(p)),
             Self::Ape(p) => Self::Ape(Arc::clone(p)),
+            Self::Tempo(p) => Self::Tempo(Arc::clone(p)),
         }
     }
 }
@@ -1492,6 +1519,99 @@ pub fn provider_new(
                 Err(_) => return 0,
             }
         }
+        Chain::Tempo => {
+            let fork = fork_opts.as_ref().map(|f| {
+                let chain_overrides = opts
+                    .chains
+                    .as_ref()
+                    .map_or_else(HashMap::default, |chains| {
+                        self::chain_overrides(chains, parse_tempo_hardfork)
+                    });
+                edr_provider::config::ForkConfig {
+                    block_number: f.block_number,
+                    cache_dir: opts
+                        .cache_dir
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    chain_overrides,
+                    http_headers: f.http_headers.as_ref().map(|headers| {
+                        headers
+                            .iter()
+                            .map(|header| (header.name.clone(), header.value.clone()))
+                            .collect::<std::collections::HashMap<_, _>>()
+                    }),
+                    url: f.json_rpc_url.clone(),
+                }
+            });
+            let is_forked = fork.is_some();
+            let mut cfg = if is_forked {
+                test_utils::create_test_config_with_fork::<TempoHardfork>(fork)
+            } else {
+                test_utils::create_test_config::<TempoHardfork>()
+            };
+            cfg.chain_id = opts.chain_id.unwrap_or(4217);
+            cfg.network_id = opts.network_id.unwrap_or(cfg.chain_id);
+            if let Some(hardfork) = opts.hardfork.as_deref().and_then(parse_tempo_hardfork) {
+                cfg.hardfork = hardfork;
+            } else {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if let Some(hardfork) =
+                    TempoHardfork::from_chain_and_timestamp(cfg.chain_id, timestamp)
+                {
+                    cfg.hardfork = hardfork;
+                }
+            }
+            if !is_forked && cfg.hardfork.is_t7() {
+                cfg.initial_base_fee_per_gas = Some(TEMPO_T7_BASE_FEE_FLOOR.into());
+            }
+            if let Some(value) = opts.allow_unlimited_contract_size {
+                cfg.allow_unlimited_contract_size = value;
+            }
+            if let Some(value) = opts.allow_blocks_with_same_timestamp {
+                cfg.allow_blocks_with_same_timestamp = value;
+            }
+            if let Some(value) = opts.bail_on_call_failure {
+                cfg.bail_on_call_failure = value;
+            }
+            if let Some(value) = opts.bail_on_transaction_failure {
+                cfg.bail_on_transaction_failure = value;
+            }
+            if let Some(value) = opts.block_gas_limit.and_then(NonZeroU64::new) {
+                cfg.default_transaction_gas_limit = value;
+                cfg.mining.block_gas_limit = Some(value);
+            }
+            if let Some(value) = opts.min_gas_price {
+                cfg.min_gas_price = value;
+            }
+            if let Some(chains) = &opts.chains {
+                cfg.chain_overrides
+                    .extend(self::chain_overrides(chains, parse_tempo_hardfork));
+            }
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, cfg.chain_id, cfg.hardfork);
+            let transaction_gas_cap = cfg.hardfork.tx_gas_limit_cap();
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
+            if !owned_accounts.is_empty() {
+                cfg.owned_accounts = owned_accounts.clone();
+            }
+            if !genesis_state.is_empty() {
+                cfg.genesis_state.extend(genesis_state.clone());
+            }
+            match Provider::<TempoChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(FfiLogger::new(id, log_cb, decode_cb, log_enabled != 0)),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(provider) => ProviderEntry::Tempo(Arc::new(provider)),
+                Err(_) => return 0,
+            }
+        }
     };
 
     PROVIDERS.lock().unwrap().insert(id, entry);
@@ -1672,6 +1792,37 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
             let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
             serde_json::to_string(&response).unwrap()
         }
+        ProviderEntry::Tempo(provider) => {
+            let req: edr_provider::requests::ProviderRequest<TempoChainSpec> =
+                match serde_json::from_str(request) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        let message = error.to_string();
+                        let value = serde_json::Value::from_str(request).ok();
+                        let method = value
+                            .as_ref()
+                            .and_then(|value| value.get("method"))
+                            .and_then(serde_json::Value::as_str);
+                        let reason = InvalidRequestReason::new(method, &message);
+                        if let Some((name, provider_error)) =
+                            reason.provider_error::<TempoChainSpec, CurrentTime>()
+                        {
+                            let _ = provider.log_failed_deserialization(name, &provider_error);
+                        }
+                        let response = jsonrpc::ResponseData::<()>::Error {
+                            error: jsonrpc::Error {
+                                code: reason.error_code(),
+                                message: reason.error_message(),
+                                data: value,
+                            },
+                        };
+                        return serde_json::to_string(&response).unwrap();
+                    }
+                };
+            let result = provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|response| response.result));
+            serde_json::to_string(&response).unwrap()
+        }
     }
 }
 
@@ -1685,6 +1836,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Arb(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Ape(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Tempo(p) => p.set_verbose_tracing(enabled != 0),
         }
     }
 }

@@ -1,9 +1,11 @@
 use edr_chain_l1::{receipt::L1BlockReceipt, rpc::receipt::L1RpcTransactionReceipt};
 use edr_chain_spec_rpc::RpcTypeFrom;
+use edr_primitives::Address;
 use edr_receipt::{log::FilterLog, AsExecutionReceipt as _};
 use serde::{Deserialize, Serialize};
 
 use crate::eip2718::TypedEnvelope;
+use crate::receipt::TempoBlockReceipt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
@@ -23,6 +25,39 @@ use edr_transaction::TransactionType;
 // even though we use our own TypedEnvelope.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenericRpcTransactionReceipt(L1RpcTransactionReceipt);
+
+/// Tempo receipt representation with its chain-specific fee metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TempoRpcTransactionReceipt {
+    #[serde(flatten)]
+    inner: GenericRpcTransactionReceipt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fee_token: Option<Address>,
+    fee_payer: Address,
+}
+
+impl TryFrom<TempoRpcTransactionReceipt>
+    for TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>
+{
+    type Error = ConversionError;
+
+    fn try_from(value: TempoRpcTransactionReceipt) -> Result<Self, Self::Error> {
+        let TempoRpcTransactionReceipt {
+            inner,
+            fee_token,
+            fee_payer,
+        } = value;
+        let receipt: L1BlockReceipt<_> = inner.try_into()?;
+        Ok(Self {
+            inner: receipt.inner,
+            block_hash: receipt.block_hash,
+            block_number: receipt.block_number,
+            fee_token,
+            fee_payer,
+        })
+    }
+}
 
 impl TryFrom<GenericRpcTransactionReceipt>
     for L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>
@@ -127,5 +162,30 @@ impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>
             effective_gas_price: value.inner.effective_gas_price,
             authorization_list: None,
         })
+    }
+}
+
+impl RpcTypeFrom<TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>>
+    for TempoRpcTransactionReceipt
+{
+    type Hardfork = tempo_hardfork::TempoHardfork;
+
+    fn rpc_type_from(
+        value: &TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
+        _hardfork: Self::Hardfork,
+    ) -> Self {
+        let receipt = L1BlockReceipt {
+            inner: value.inner.clone(),
+            block_hash: value.block_hash,
+            block_number: value.block_number,
+        };
+        Self {
+            inner: GenericRpcTransactionReceipt::rpc_type_from(
+                &receipt,
+                edr_chain_l1::Hardfork::OSAKA,
+            ),
+            fee_token: value.fee_token,
+            fee_payer: value.fee_payer,
+        }
     }
 }
