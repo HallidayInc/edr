@@ -112,9 +112,22 @@ impl ContextChainSpec for OpChainSpec {
 }
 
 impl EvmChainSpec for OpChainSpec {
-    type PrecompileProvider<BlockT: revm_context::Block, DatabaseT: Database> = OpPrecompiles;
+    type EvmContext<BlockT: revm_context::Block, DatabaseT: Database + core::fmt::Debug> = Context<
+        BlockT,
+        Self::SignedTransaction,
+        CfgEnv<Self::Hardfork>,
+        DatabaseT,
+        revm_context::Journal<DatabaseT>,
+        Self::Context,
+    >;
 
-    fn new_precompile_provider<BlockT: revm_context::Block, DatabaseT: Database>(
+    type PrecompileProvider<BlockT: revm_context::Block, DatabaseT: Database + core::fmt::Debug> =
+        OpPrecompiles;
+
+    fn new_precompile_provider<
+        BlockT: revm_context::Block,
+        DatabaseT: Database + core::fmt::Debug,
+    >(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT> {
         OpPrecompiles::new_with_spec(hardfork)
@@ -122,7 +135,7 @@ impl EvmChainSpec for OpChainSpec {
 
     fn dry_run<
         BlockT: revm_context::Block,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
             Output = InterpreterResult,
@@ -166,7 +179,7 @@ impl EvmChainSpec for OpChainSpec {
 
     fn dry_run_with_inspector<
         BlockT: revm_context::Block,
-        DatabaseT: revm_context::Database,
+        DatabaseT: revm_context::Database + core::fmt::Debug,
         InspectorT: edr_chain_spec_evm::Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
@@ -440,6 +453,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: Some(B256::random()),
             block_access_list_hash: None,
+            tempo_execution: None,
         }
     }
 

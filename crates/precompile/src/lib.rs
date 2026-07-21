@@ -13,6 +13,7 @@ pub use revm_precompile::{
     secp256r1, u64_to_address, Precompile, PrecompileError, PrecompileFn, PrecompileResult,
     PrecompileSpecId, Precompiles,
 };
+use revm_primitives::AddressSet;
 
 /// A precompile provider that allows adding custom or overwriting existing
 /// precompiles.
@@ -25,7 +26,7 @@ pub struct OverriddenPrecompileProvider<
     custom_precompiles: HashMap<Address, PrecompileFn>,
     // Cache of unique addresses to avoid reporting duplicates between `base` and
     // `custom_precompiles`. This speeds up the `warm_addresses` method.
-    unique_addresses: HashSet<Address>,
+    unique_addresses: AddressSet,
     phantom: PhantomData<ContextT>,
 }
 
@@ -57,7 +58,7 @@ impl<
     /// Consumes the provider and returns the set of all unique precompile
     /// addresses.
     pub fn into_addresses(self) -> HashSet<Address> {
-        self.unique_addresses
+        self.unique_addresses.into_iter().collect()
     }
 
     /// Adds a custom precompile.
@@ -115,8 +116,8 @@ impl<
         Ok(Some(result))
     }
 
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(self.unique_addresses.iter().copied())
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.unique_addresses
     }
 
     fn contains(&self, address: &Address) -> bool {
@@ -127,7 +128,7 @@ impl<
 fn unique_addresses<BaseProviderT, ContextT>(
     base: &BaseProviderT,
     custom_precompiles: &HashMap<Address, PrecompileFn>,
-) -> HashSet<Address>
+) -> AddressSet
 where
     BaseProviderT: PrecompileProvider<ContextT, Output = InterpreterResult>,
     ContextT: ContextTrait,
@@ -135,7 +136,7 @@ where
     custom_precompiles
         .keys()
         .cloned()
-        .chain(base.warm_addresses())
+        .chain(base.warm_addresses().iter().copied())
         .collect()
 }
 

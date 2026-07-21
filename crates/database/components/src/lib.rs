@@ -19,6 +19,15 @@ pub struct DatabaseComponents<BlockchainT, StateT> {
     pub state: StateT,
 }
 
+impl<BlockchainT, StateT> std::fmt::Debug for DatabaseComponents<BlockchainT, StateT> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DatabaseComponents")
+            .field("native_token_mirror", &self.native_token_mirror)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Wrapper type around a blockchain and state error.
 #[derive(Debug, thiserror::Error)]
 pub enum DatabaseComponentError<BlockchainErrorT, StateErrorT> {

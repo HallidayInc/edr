@@ -5,7 +5,20 @@ use std::sync::OnceLock;
 use edr_chain_config::{ChainConfig, ForkCondition, HardforkActivation};
 use edr_eip7892::ScheduledBlobParams;
 use edr_primitives::HashMap;
-pub use revm_primitives::hardfork::name;
+
+/// Ethereum hardfork names exposed by EDR's public APIs.
+pub mod name {
+    pub use revm_primitives::hardfork::name::*;
+
+    // REVM 41 removed identifiers that do not select distinct execution rules.
+    // Keep their names here to preserve EDR's public configuration API.
+    pub const FRONTIER_THAWING: &str = "Frontier Thawing";
+    pub const DAO_FORK: &str = "DAO Fork";
+    pub const CONSTANTINOPLE: &str = "Constantinople";
+    pub const MUIR_GLACIER: &str = "MuirGlacier";
+    pub const ARROW_GLACIER: &str = "Arrow Glacier";
+    pub const GRAY_GLACIER: &str = "Gray Glacier";
+}
 
 use crate::{Hardfork, L1_BASE_FEE_PARAMS};
 
@@ -18,16 +31,8 @@ const MAINNET_HARDFORKS: &[HardforkActivation<Hardfork>] = &[
         hardfork: Hardfork::FRONTIER,
     },
     HardforkActivation {
-        condition: ForkCondition::Block(200_000),
-        hardfork: Hardfork::FRONTIER_THAWING,
-    },
-    HardforkActivation {
         condition: ForkCondition::Block(1_150_000),
         hardfork: Hardfork::HOMESTEAD,
-    },
-    HardforkActivation {
-        condition: ForkCondition::Block(1_920_000),
-        hardfork: Hardfork::DAO_FORK,
     },
     HardforkActivation {
         condition: ForkCondition::Block(2_463_000),
@@ -43,19 +48,11 @@ const MAINNET_HARDFORKS: &[HardforkActivation<Hardfork>] = &[
     },
     HardforkActivation {
         condition: ForkCondition::Block(7_280_000),
-        hardfork: Hardfork::CONSTANTINOPLE,
-    },
-    HardforkActivation {
-        condition: ForkCondition::Block(7_280_000),
         hardfork: Hardfork::PETERSBURG,
     },
     HardforkActivation {
         condition: ForkCondition::Block(9_069_000),
         hardfork: Hardfork::ISTANBUL,
-    },
-    HardforkActivation {
-        condition: ForkCondition::Block(9_200_000),
-        hardfork: Hardfork::MUIR_GLACIER,
     },
     HardforkActivation {
         condition: ForkCondition::Block(12_244_000),
@@ -64,14 +61,6 @@ const MAINNET_HARDFORKS: &[HardforkActivation<Hardfork>] = &[
     HardforkActivation {
         condition: ForkCondition::Block(12_965_000),
         hardfork: Hardfork::LONDON,
-    },
-    HardforkActivation {
-        condition: ForkCondition::Block(13_773_000),
-        hardfork: Hardfork::ARROW_GLACIER,
-    },
-    HardforkActivation {
-        condition: ForkCondition::Block(15_050_000),
-        hardfork: Hardfork::GRAY_GLACIER,
     },
     HardforkActivation {
         condition: ForkCondition::Block(15_537_394),

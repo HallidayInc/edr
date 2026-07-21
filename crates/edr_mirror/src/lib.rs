@@ -17,7 +17,6 @@ use edr_state_api::{
 };
 use revm_context_interface::{
     context::ContextTr,
-    host::LoadError,
     journaled_state::{account::JournaledAccountTr, JournalTr},
     Host,
 };
@@ -25,9 +24,10 @@ use revm_handler::instructions::EthInstructions;
 use revm_interpreter::{
     instruction_context::InstructionContext,
     interpreter_types::{InputsTr, InterpreterTypes, MemoryTr, RuntimeFlag, StackTr},
-    Instruction, InstructionResult,
+    Instruction, InstructionExecResult, InstructionResult,
 };
 use revm_primitives::{hardfork::SpecId, keccak256};
+use revm_state::TransactionId;
 
 #[derive(Debug, Default)]
 pub struct MirrorContext {
@@ -185,7 +185,7 @@ where
             storage_key,
             erc20_balance,
         )?;
-        let slot = EvmStorageSlot::new_changed(old_value, erc20_balance, 0);
+        let slot = EvmStorageSlot::new_changed(old_value, erc20_balance, TransactionId::ZERO);
         mirrored_changes.apply_storage_change(
             native_token_mirror.token,
             storage_key,
@@ -239,47 +239,40 @@ where
 // explicit.
 // ---------------------------------------------------------------------------
 
-pub fn keccak256_with_mirror<W, H>(context: InstructionContext<'_, H, W>)
+pub fn keccak256_with_mirror<W, H>(context: InstructionContext<'_, H, W>) -> InstructionExecResult
 where
     W: InterpreterTypes,
     H: MirrorHost,
 {
     let interp = context.interpreter;
     if interp.stack.len() < 2 {
-        interp.halt_underflow();
-        return;
+        return Err(InstructionResult::StackUnderflow);
     }
     let ([offset], top) = unsafe { interp.stack.popn_top::<1>().unwrap_unchecked() };
 
     let Some(len_usize) = u256_to_usize(*top) else {
-        interp.halt(InstructionResult::InvalidOperandOOG);
-        return;
+        return Err(InstructionResult::InvalidOperandOOG);
     };
     if !interp
         .gas
         .record_regular_cost(context.host.gas_params().keccak256_cost(len_usize))
     {
-        interp.halt_oog();
-        return;
+        return Err(InstructionResult::OutOfGas);
     }
 
     let hash = if len_usize == 0 {
         KECCAK_EMPTY
     } else {
         let Some(from) = u256_to_usize(offset) else {
-            interp.halt(InstructionResult::InvalidOperandOOG);
-            return;
+            return Err(InstructionResult::InvalidOperandOOG);
         };
-        if let Err(result) = revm_interpreter::interpreter::resize_memory(
+        revm_interpreter::interpreter::resize_memory(
             &mut interp.gas,
             &mut interp.memory,
             context.host.gas_params(),
             from,
             len_usize,
-        ) {
-            interp.halt(result);
-            return;
-        }
+        )?;
         let mem_slice = interp.memory.slice_len(from, len_usize);
         let bytes = mem_slice.as_ref();
         let h = keccak256(bytes);
@@ -287,17 +280,17 @@ where
         h
     };
     *top = hash.into();
+    Ok(())
 }
 
-pub fn sload_with_mirror<W, H>(context: InstructionContext<'_, H, W>)
+pub fn sload_with_mirror<W, H>(context: InstructionContext<'_, H, W>) -> InstructionExecResult
 where
     W: InterpreterTypes,
     H: MirrorHost,
 {
     let interp = context.interpreter;
     if interp.stack.len() < 1 {
-        interp.halt_underflow();
-        return;
+        return Err(InstructionResult::StackUnderflow);
     }
     let ([], index) = unsafe { interp.stack.popn_top::<0>().unwrap_unchecked() };
 
@@ -311,8 +304,7 @@ where
         match context.host.sload_skip_cold_load(target, slot, skip_cold) {
             Ok(storage) => {
                 if storage.is_cold && !interp.gas.record_regular_cost(additional_cold_cost) {
-                    interp.halt_oog();
-                    return;
+                    return Err(InstructionResult::OutOfGas);
                 }
                 if let Some(owner) = context.host.mirror().balance_owner(target, slot) {
                     let native = context
@@ -325,14 +317,14 @@ where
                     *index = storage.data;
                 }
             }
-            Err(LoadError::ColdLoadSkipped) => interp.halt_oog(),
-            Err(LoadError::DBError) => interp.halt_fatal(),
+            Err(error) => return Err(error.into()),
         }
     } else {
         let slot = *index;
-        let Some(storage) = context.host.sload(target, slot) else {
-            return interp.halt_fatal();
-        };
+        let storage = context
+            .host
+            .sload(target, slot)
+            .ok_or(InstructionResult::FatalExternalError)?;
         if let Some(owner) = context.host.mirror().balance_owner(target, slot) {
             let native = context
                 .host
@@ -344,21 +336,20 @@ where
             *index = storage.data;
         }
     }
+    Ok(())
 }
 
-pub fn sstore_with_mirror<W, H>(context: InstructionContext<'_, H, W>)
+pub fn sstore_with_mirror<W, H>(context: InstructionContext<'_, H, W>) -> InstructionExecResult
 where
     W: InterpreterTypes,
     H: MirrorHost,
 {
     let interp = context.interpreter;
     if interp.runtime_flag.is_static() {
-        interp.halt(InstructionResult::StateChangeDuringStaticCall);
-        return;
+        return Err(InstructionResult::StateChangeDuringStaticCall);
     }
     if interp.stack.len() < 2 {
-        interp.halt_underflow();
-        return;
+        return Err(InstructionResult::StackUnderflow);
     }
     let [index, value] = unsafe { interp.stack.popn::<2>().unwrap_unchecked() };
 
@@ -368,8 +359,14 @@ where
     if spec_id.is_enabled_in(SpecId::ISTANBUL)
         && interp.gas.remaining() <= context.host.gas_params().call_stipend()
     {
-        interp.halt(InstructionResult::ReentrancySentryOOG);
-        return;
+        return Err(InstructionResult::ReentrancySentryOOG);
+    }
+
+    if !interp
+        .gas
+        .record_regular_cost(context.host.gas_params().sstore_static_gas())
+    {
+        return Err(InstructionResult::OutOfGas);
     }
 
     let state_load = if spec_id.is_enabled_in(SpecId::BERLIN) {
@@ -380,21 +377,13 @@ where
             .sstore_skip_cold_load(target, index, value, skip_cold)
         {
             Ok(load) => load,
-            Err(LoadError::ColdLoadSkipped) => {
-                interp.halt_oog();
-                return;
-            }
-            Err(LoadError::DBError) => {
-                interp.halt_fatal();
-                return;
-            }
+            Err(error) => return Err(error.into()),
         }
     } else {
-        let Some(load) = context.host.sstore(target, index, value) else {
-            interp.halt_fatal();
-            return;
-        };
-        load
+        context
+            .host
+            .sstore(target, index, value)
+            .ok_or(InstructionResult::FatalExternalError)?
     };
 
     let is_istanbul = spec_id.is_enabled_in(SpecId::ISTANBUL);
@@ -406,8 +395,7 @@ where
             state_load.is_cold,
         ))
     {
-        interp.halt_oog();
-        return;
+        return Err(InstructionResult::OutOfGas);
     }
 
     if context.host.is_amsterdam_eip8037_enabled()
@@ -415,8 +403,17 @@ where
             .gas
             .record_state_cost(context.host.gas_params().sstore_state_gas(&state_load.data))
     {
-        interp.halt_oog();
-        return;
+        return Err(InstructionResult::OutOfGas);
+    }
+
+    if context.host.is_amsterdam_eip8037_enabled() {
+        let refill = context
+            .host
+            .gas_params()
+            .sstore_state_gas_refill(&state_load.data);
+        if refill > 0 {
+            interp.gas.refill_reservoir(refill);
+        }
     }
 
     interp.gas.record_refund(
@@ -438,6 +435,7 @@ where
             .erc20_to_native_preserving_remainder(value, current_native);
         context.host.set_native_balance(owner, native);
     }
+    Ok(())
 }
 
 #[inline]
@@ -459,20 +457,23 @@ where
     H: MirrorHost,
 {
     let mut table: EthInstructions<W, H> = EthInstructions::new_mainnet_with_spec(spec);
-    let keccak256_static_gas = table.instruction_table[0x20].static_gas();
-    let sload_static_gas = table.instruction_table[0x54].static_gas();
-    let sstore_static_gas = table.instruction_table[0x55].static_gas();
+    let keccak256_static_gas = table.gas_table()[0x20];
+    let sload_static_gas = table.gas_table()[0x54];
+    let sstore_static_gas = table.gas_table()[0x55];
     table.insert_instruction(
         0x20,
-        Instruction::new(keccak256_with_mirror::<W, H>, keccak256_static_gas),
+        Instruction::new(keccak256_with_mirror::<W, H>),
+        keccak256_static_gas,
     );
     table.insert_instruction(
         0x54,
-        Instruction::new(sload_with_mirror::<W, H>, sload_static_gas),
+        Instruction::new(sload_with_mirror::<W, H>),
+        sload_static_gas,
     );
     table.insert_instruction(
         0x55,
-        Instruction::new(sstore_with_mirror::<W, H>, sstore_static_gas),
+        Instruction::new(sstore_with_mirror::<W, H>),
+        sstore_static_gas,
     );
     table
 }

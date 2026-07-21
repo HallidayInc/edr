@@ -10,6 +10,9 @@ pub use revm_inspectors::access_list::AccessListInspector;
 
 mod error_ext;
 
+mod edge_cov;
+pub use edge_cov::EdgeCovInspector;
+
 mod logs;
 pub use logs::LogCollector;
 

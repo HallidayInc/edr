@@ -52,16 +52,16 @@ impl<ContextT: ContextTrait, InterpreterT: InterpreterTypes> Inspector<ContextT,
             // Short-circuit the call to avoid execution of empty bytecode—which results in
             // a `InstructionResult::Stop`—instead replaying the previous call or create's
             // output to preserve the returndata buffer.
-            Some(CallOutcome {
-                result: InterpreterResult {
+            let mut outcome = CallOutcome::new(
+                InterpreterResult {
                     result: InstructionResult::Return,
                     output: self.previous_call_output.clone(),
                     gas: Gas::new(inputs.gas_limit),
                 },
-                memory_offset: inputs.return_memory_offset.clone(),
-                was_precompile_called: false,
-                precompile_call_logs: vec![],
-            })
+                inputs.return_memory_offset.clone(),
+            );
+            outcome.charged_new_account_state_gas = inputs.charged_new_account_state_gas;
+            Some(outcome)
         } else {
             None
         }

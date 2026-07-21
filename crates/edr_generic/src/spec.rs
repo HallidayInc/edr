@@ -12,8 +12,8 @@ use edr_chain_l1::{
     L1ChainSpec, L1_GENESIS_BLOCK_EXTRA_DATA,
 };
 use edr_chain_spec::{
-    BlobExcessGasAndPrice, BlockEnvChainSpec, BlockEnvConstructor, BlockEnvForHardfork,
-    BlockEnvTrait, ChainSpec, ContextChainSpec, EvmSpecId, HardforkChainSpec,
+    BlobExcessGasAndPrice, BlockEnvChainSpec, BlockEnvConstructor, BlockEnvExt,
+    BlockEnvForHardfork, BlockEnvTrait, ChainSpec, ContextChainSpec, EvmSpecId, HardforkChainSpec,
     TransactionValidation,
 };
 use edr_chain_spec_block::BlockChainSpec;
@@ -122,6 +122,22 @@ impl<'header, BlockHeaderT: BlockEnvForHardfork<EvmSpecId>> BlockEnvTrait
     }
 }
 
+impl<'header, BlockHeaderT: BlockEnvForHardfork<EvmSpecId>> BlockEnvExt
+    for HeaderAndEvmSpecWithFallback<'header, BlockHeaderT>
+{
+    fn timestamp_millis_part(&self) -> u64 {
+        self.inner.timestamp_millis_part()
+    }
+
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        self.inner.epoch_length()
+    }
+
+    fn proposer_public_key(&self) -> Option<B256> {
+        self.inner.proposer_public_key()
+    }
+}
+
 impl BlockChainSpec for GenericChainSpec {
     type Block =
         dyn SyncBlock<Arc<Self::Receipt>, Self::SignedTransaction, Error = Self::FetchReceiptError>;
@@ -159,10 +175,19 @@ impl ContextChainSpec for GenericChainSpec {
 }
 
 impl EvmChainSpec for GenericChainSpec {
-    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> =
+    type EvmContext<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> = Context<
+        BlockT,
+        Self::SignedTransaction,
+        CfgEnv<Self::Hardfork>,
+        DatabaseT,
+        Journal<DatabaseT>,
+        Self::Context,
+    >;
+
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> =
         <L1ChainSpec as EvmChainSpec>::PrecompileProvider<BlockT, DatabaseT>;
 
-    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database>(
+    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT> {
         <L1ChainSpec as EvmChainSpec>::new_precompile_provider::<BlockT, DatabaseT>(hardfork)
@@ -170,7 +195,7 @@ impl EvmChainSpec for GenericChainSpec {
 
     fn dry_run<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
             Output = InterpreterResult,
@@ -211,7 +236,7 @@ impl EvmChainSpec for GenericChainSpec {
 
     fn dry_run_with_inspector<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         InspectorT: Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
@@ -385,9 +410,19 @@ impl ContextChainSpec for ArbChainSpec {
 }
 
 impl EvmChainSpec for ArbChainSpec {
-    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> = ArbPrecompiles;
+    type EvmContext<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> = Context<
+        BlockT,
+        Self::SignedTransaction,
+        CfgEnv<Self::Hardfork>,
+        DatabaseT,
+        Journal<DatabaseT>,
+        Self::Context,
+    >;
 
-    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database>(
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> =
+        ArbPrecompiles;
+
+    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT> {
         ArbPrecompiles::new(hardfork)
@@ -395,7 +430,7 @@ impl EvmChainSpec for ArbChainSpec {
 
     fn dry_run<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
             Output = InterpreterResult,
@@ -436,7 +471,7 @@ impl EvmChainSpec for ArbChainSpec {
 
     fn dry_run_with_inspector<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         InspectorT: Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
@@ -603,9 +638,19 @@ impl ContextChainSpec for ApeChainSpec {
 }
 
 impl EvmChainSpec for ApeChainSpec {
-    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database> = ApePrecompiles;
+    type EvmContext<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> = Context<
+        BlockT,
+        Self::SignedTransaction,
+        CfgEnv<Self::Hardfork>,
+        DatabaseT,
+        Journal<DatabaseT>,
+        Self::Context,
+    >;
 
-    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database>(
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> =
+        ApePrecompiles;
+
+    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT> {
         ApePrecompiles::new(hardfork)
@@ -613,7 +658,7 @@ impl EvmChainSpec for ApeChainSpec {
 
     fn dry_run<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
             Output = InterpreterResult,
@@ -654,7 +699,7 @@ impl EvmChainSpec for ApeChainSpec {
 
     fn dry_run_with_inspector<
         BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         InspectorT: Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
@@ -816,6 +861,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: Some(B256::random()),
             block_access_list_hash: None,
+            tempo_execution: None,
         }
     }
 

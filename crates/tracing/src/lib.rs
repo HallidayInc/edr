@@ -39,7 +39,7 @@ fn result_gas_from_spent(gas: &Gas) -> ResultGas {
         gas.total_gas_spent(),
         gas.refunded() as u64,
         0,
-        gas.state_gas_spent(),
+        gas.state_gas_spent().max(0) as u64,
     )
 }
 
@@ -48,7 +48,7 @@ fn result_gas_from_spent(gas: &Gas) -> ResultGas {
 ///
 /// `floor_gas` is `0` for the same reason as in [`result_gas_from_spent`].
 fn result_gas_from_limit(gas: &Gas) -> ResultGas {
-    ResultGas::new_with_state_gas(gas.limit(), 0, 0, gas.state_gas_spent())
+    ResultGas::new_with_state_gas(gas.limit(), 0, 0, gas.state_gas_spent().max(0) as u64)
 }
 
 /// Stack tracing message

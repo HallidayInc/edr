@@ -84,9 +84,19 @@ impl ContextChainSpec for L1ChainSpec {
 }
 
 impl EvmChainSpec for L1ChainSpec {
-    type PrecompileProvider<BlockEnvT: BlockEnvTrait, DatabaseT: Database> = EthPrecompiles;
+    type EvmContext<BlockEnvT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> = Context<
+        BlockEnvT,
+        Self::SignedTransaction,
+        CfgEnv<Self::Hardfork>,
+        DatabaseT,
+        Journal<DatabaseT>,
+        Self::Context,
+    >;
 
-    fn new_precompile_provider<BlockEnvT: BlockEnvTrait, DatabaseT: Database>(
+    type PrecompileProvider<BlockEnvT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug> =
+        EthPrecompiles;
+
+    fn new_precompile_provider<BlockEnvT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockEnvT, DatabaseT> {
         EthPrecompiles::new(hardfork)
@@ -94,7 +104,7 @@ impl EvmChainSpec for L1ChainSpec {
 
     fn dry_run<
         BlockEnvT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockEnvT, DatabaseT>,
             Output = InterpreterResult,
@@ -135,7 +145,7 @@ impl EvmChainSpec for L1ChainSpec {
 
     fn dry_run_with_inspector<
         BlockEnvT: BlockEnvTrait,
-        DatabaseT: Database,
+        DatabaseT: Database + core::fmt::Debug,
         InspectorT: Inspector<ContextForChainSpec<Self, BlockEnvT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockEnvT, DatabaseT>,

@@ -27,9 +27,10 @@ The library exposes a simple context object and provider constructor. The constr
 - `"arb"` for Arbitrum-compatible chains, or
 - `"ape"` for ApeChain's Arbitrum-based precompile extensions
 - `fork`: `{ jsonRpcUrl, blockNumber?, httpHeaders? }` configuration for forking a remote chain
-- `chainId`: override the provider's chain ID
-- `hardfork`: starting hardfork for the chain
-- `chains`: array of chain configurations with custom hardfork activations
+- `chainId`: set the provider's chain ID; for forks, set this to the remote chain ID
+- `hardfork`: optional compatibility hardfork for remote and locally mined blocks
+- `chains`: optional per-chain activation histories when the remote chain cannot use the
+  compatibility hardfork
 - `allowUnlimitedContractSize`: allow deploying contracts larger than the usual limit
 - `allowBlocksWithSameTimestamp`: permit mining blocks with duplicate timestamps
 - `bailOnCallFailure`: return an error when `eth_call` fails
@@ -39,6 +40,11 @@ The library exposes a simple context object and provider constructor. The constr
 - `networkId`: set the network ID separately from `chainId`
 - `cacheDir`: directory used to cache RPC responses
 - `ownedAccounts`: array of accounts to pre-fund in the genesis block with the fields `secretKey` and `balance`
+
+By default, forked blocks and locally mined blocks use the same compatibility hardfork (Osaka for
+L1-compatible chains and Isthmus for OP Stack chains). A `chains` activation history takes
+precedence when exact historical or lagging-chain behavior is required. Hardfork-specific
+transaction gas caps remain enabled.
 
 `Context.createProvider` also accepts an optional logger configuration:
 
@@ -65,6 +71,7 @@ using ctx = new Context();
 using provider = ctx.createProvider({
   chain: "op",
   fork: { jsonRpcUrl: "https://base.llamarpc.com" },
+  chainId: 8453,
   blockGasLimit: 30_000_000,
 });
 
@@ -84,14 +91,7 @@ using arb = ctx.createProvider({
   chain: "arb",
   fork: { jsonRpcUrl: "https://arb1.arbitrum.io/rpc" },
   chainId: 42161,
-  hardfork: "cancun",
   bailOnCallFailure: true,
-  chains: [
-    {
-      chainId: 42161,
-      hardforks: [{ blockNumber: 0, specId: "cancun" }],
-    },
-  ],
 });
 
 const call = JSON.stringify({

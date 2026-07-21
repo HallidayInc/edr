@@ -1,18 +1,17 @@
 use std::sync::Arc;
 
 use edr_generic::ArbChainSpec;
-use edr_napi_core::{
-    logger::Logger,
-    provider::{SyncProvider, SyncProviderFactory},
-    subscription::subscriber_callback_for_chain_spec,
-};
+use edr_napi_core::{logger::Logger, provider::SyncProvider};
 use edr_provider::time::CurrentTime;
 use edr_solidity::contract_decoder::ContractDecoder;
 use napi::tokio::runtime;
 use napi_derive::napi;
 use parking_lot::RwLock;
 
-use crate::provider::ProviderFactory;
+use crate::{
+    provider::{factory::SyncProviderFactory, ProviderFactory},
+    subscription::{subscriber_callback_for_chain_spec, SubscriptionTsfn},
+};
 
 pub struct ArbChainProviderFactory;
 
@@ -22,14 +21,14 @@ impl SyncProviderFactory for ArbChainProviderFactory {
         runtime: runtime::Handle,
         provider_config: edr_napi_core::provider::Config,
         logger_config: edr_napi_core::logger::Config,
-        subscription_callback: edr_napi_core::subscription::Callback,
+        subscription_callback: Arc<SubscriptionTsfn>,
         contract_decoder: Arc<RwLock<ContractDecoder>>,
     ) -> napi::Result<Arc<dyn SyncProvider>> {
         let logger =
             Logger::<ArbChainSpec, CurrentTime>::new(logger_config, Arc::clone(&contract_decoder))?;
 
         let provider_config =
-            edr_provider::ProviderConfig::<edr_chain_l1::Hardfork>::try_from(provider_config)?;
+            edr_provider::config::Provider::<edr_chain_l1::Hardfork>::try_from(provider_config)?;
 
         let provider = edr_provider::Provider::<ArbChainSpec>::new(
             runtime.clone(),

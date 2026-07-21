@@ -193,6 +193,7 @@ fn convert_instruction_result_to_exit_code<HaltReasonT: HaltReasonTrait>(
         SuccessOrHalt::Internal(result) => match result {
             InternalResult::CreateInitCodeStartingEF00 => ExitCode::CreateInitCodeStartingEF00,
             InternalResult::InvalidExtDelegateCallTarget => ExitCode::InvalidExtDelegateCallTarget,
+            InternalResult::Suspend => ExitCode::InternalCallOrCreate,
         },
     }
 }

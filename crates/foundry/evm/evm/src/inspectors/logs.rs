@@ -45,6 +45,7 @@ impl LogCollector {
                 memory_offset: inputs.return_memory_offset.clone(),
                 was_precompile_called: true,
                 precompile_call_logs: vec![],
+                charged_new_account_state_gas: inputs.charged_new_account_state_gas,
             });
         }
         None

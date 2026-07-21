@@ -3,20 +3,24 @@ use edr_primitives::{KECCAK_RLP_EMPTY_ARRAY, U256};
 
 use crate::BlockHeader;
 
-fn bomb_delay(spec_id: EvmSpecId) -> u64 {
+fn bomb_delay(spec_id: EvmSpecId, block_number: u64) -> u64 {
     match spec_id {
         EvmSpecId::FRONTIER
-        | EvmSpecId::FRONTIER_THAWING
         | EvmSpecId::HOMESTEAD
-        | EvmSpecId::DAO_FORK
         | EvmSpecId::TANGERINE
         | EvmSpecId::SPURIOUS_DRAGON => 0,
         EvmSpecId::BYZANTIUM => 3000000,
-        EvmSpecId::CONSTANTINOPLE | EvmSpecId::PETERSBURG | EvmSpecId::ISTANBUL => 5000000,
-        EvmSpecId::MUIR_GLACIER | EvmSpecId::BERLIN | EvmSpecId::LONDON => 9000000,
-        // SpecId::LONDON => 9500000, // EIP-3554
-        EvmSpecId::ARROW_GLACIER => 10700000,
-        EvmSpecId::GRAY_GLACIER => 11400000,
+        EvmSpecId::PETERSBURG => 5000000,
+        // Muir Glacier didn't change EVM execution, so newer REVM versions no
+        // longer have a distinct spec id for it.
+        EvmSpecId::ISTANBUL if block_number >= 9_200_000 => 9_000_000,
+        EvmSpecId::ISTANBUL => 5_000_000,
+        EvmSpecId::BERLIN => 9_000_000,
+        // Arrow and Gray Glacier were also header-only hardforks. Preserve
+        // their mainnet difficulty-bomb delays using their activation blocks.
+        EvmSpecId::LONDON if block_number >= 15_050_000 => 11_400_000,
+        EvmSpecId::LONDON if block_number >= 13_773_000 => 10_700_000,
+        EvmSpecId::LONDON => 9_000_000,
         _ => {
             unreachable!("Post-merge hardforks don't have a bomb delay")
         }
@@ -59,7 +63,7 @@ pub fn calculate_ethash_canonical_difficulty(
     };
 
     if let Some(exp) = block_number
-        .checked_sub(bomb_delay(spec_id))
+        .checked_sub(bomb_delay(spec_id, block_number))
         .and_then(|num| (num / 100000).checked_sub(2))
     {
         difficulty += U256::from(2u64).pow(U256::from(exp));
