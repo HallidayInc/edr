@@ -12,6 +12,54 @@ pub use revm_context_interface::{
 
 pub use self::transaction::{ExecutableTransaction, TransactionValidation};
 
+/// EDR extensions for chain-native block execution metadata.
+pub trait BlockEnvExt: BlockEnvTrait {
+    /// Sub-second timestamp component in milliseconds.
+    fn timestamp_millis_part(&self) -> u64 {
+        0
+    }
+
+    /// Number of blocks per consensus epoch.
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        std::num::NonZeroU64::MIN
+    }
+
+    /// Consensus proposer public key.
+    fn proposer_public_key(&self) -> Option<B256> {
+        None
+    }
+}
+
+impl BlockEnvExt for revm_context::BlockEnv {}
+
+impl<T: BlockEnvExt + ?Sized> BlockEnvExt for &T {
+    fn timestamp_millis_part(&self) -> u64 {
+        T::timestamp_millis_part(self)
+    }
+
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        T::epoch_length(self)
+    }
+
+    fn proposer_public_key(&self) -> Option<B256> {
+        T::proposer_public_key(self)
+    }
+}
+
+impl<T: BlockEnvExt + ?Sized> BlockEnvExt for &mut T {
+    fn timestamp_millis_part(&self) -> u64 {
+        T::timestamp_millis_part(self)
+    }
+
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        T::epoch_length(self)
+    }
+
+    fn proposer_public_key(&self) -> Option<B256> {
+        T::proposer_public_key(self)
+    }
+}
+
 /// Halt reason type for the EVM.
 pub type EvmHaltReason = revm_context_interface::result::HaltReason;
 
@@ -30,6 +78,7 @@ pub trait BlockEnvChainSpec: HardforkChainSpec {
     /// (being mined) and its hardfork.
     type BlockEnv<'env, BlockHeaderT>: BlockEnvConstructor<'env, Self::Hardfork, &'env BlockHeaderT>
         + BlockEnvTrait
+        + BlockEnvExt
     where
         BlockHeaderT: 'env + BlockEnvForHardfork<Self::Hardfork>;
 }
@@ -91,6 +140,22 @@ pub trait BlockEnvForHardfork<HardforkT> {
         hardfork: HardforkT,
         scheduled_blob_params: Option<&ScheduledBlobParams>,
     ) -> Option<BlobExcessGasAndPrice>;
+
+    /// Sub-second timestamp used by chains whose execution rules have
+    /// millisecond precision.
+    fn timestamp_millis_part_for_hardfork(&self, _hardfork: HardforkT) -> u64 {
+        0
+    }
+
+    /// Consensus epoch length used by chain-native execution rules.
+    fn epoch_length_for_hardfork(&self, _hardfork: HardforkT) -> std::num::NonZeroU64 {
+        std::num::NonZeroU64::MIN
+    }
+
+    /// Consensus proposer key used by chain-native execution rules.
+    fn proposer_public_key_for_hardfork(&self, _hardfork: HardforkT) -> Option<B256> {
+        None
+    }
 }
 
 /// Trait for specifying the contextual information type of a chain.

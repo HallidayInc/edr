@@ -1,7 +1,7 @@
 use edr_block_header::BlockHeader;
 use edr_blockchain_api::{r#dyn::DynBlockchainError, BlockHashByNumber};
 use edr_chain_config::NativeTokenMirror;
-use edr_chain_spec::BlobExcessGasAndPrice;
+use edr_chain_spec::{BlobExcessGasAndPrice, BlockEnvExt};
 use edr_chain_spec_evm::{BlockEnvTrait, CfgEnv, ContextForChainSpec, Inspector};
 use edr_chain_spec_provider::ProviderChainSpec;
 use edr_database_components::{DatabaseComponents, WrapDatabaseRef};
@@ -59,6 +59,20 @@ impl<BlockEnvT: BlockEnvTrait> BlockEnvTrait for BlockEnvWithZeroBaseFee<BlockEn
 
     fn blob_excess_gas_and_price(&self) -> Option<BlobExcessGasAndPrice> {
         self.inner.blob_excess_gas_and_price()
+    }
+}
+
+impl<BlockEnvT: BlockEnvTrait + BlockEnvExt> BlockEnvExt for BlockEnvWithZeroBaseFee<BlockEnvT> {
+    fn timestamp_millis_part(&self) -> u64 {
+        self.inner.timestamp_millis_part()
+    }
+
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        self.inner.epoch_length()
+    }
+
+    fn proposer_public_key(&self) -> Option<B256> {
+        self.inner.proposer_public_key()
     }
 }
 

@@ -1,5 +1,3 @@
-use std::boxed::Box;
-
 use alloy_primitives::Log;
 use alloy_sol_types::{sol, Revert, SolCall, SolError, SolEvent, SolValue};
 use edr_chain_spec_evm::{
@@ -9,6 +7,7 @@ use edr_primitives::{address, keccak256, Address, Bytes, B256, U256};
 use revm_context_interface::{journaled_state::account::JournaledAccountTr, Cfg, Transaction as _};
 use revm_handler::PrecompileProvider;
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
+use revm_primitives::AddressSet;
 
 use crate::{
     APE_APY_SLOT, APE_PRECOMPILE_STATE_ADDRESS, APE_SHARE_COUNT_SLOT, APE_SHARE_PRICE_SLOT,
@@ -128,13 +127,32 @@ use self::{
 #[derive(Debug, Clone)]
 pub struct ArbPrecompiles {
     inner: EthPrecompiles,
+    warm_addresses: AddressSet,
 }
 
 impl ArbPrecompiles {
     pub fn new(spec: edr_chain_spec::EvmSpecId) -> Self {
+        let inner = EthPrecompiles::new(spec);
+        let warm_addresses = inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([ARBSYS_ADDRESS, ARBINFO_ADDRESS, ARBOWNERPUBLIC_ADDRESS])
+            .collect();
         Self {
-            inner: EthPrecompiles::new(spec),
+            inner,
+            warm_addresses,
         }
+    }
+
+    fn refresh_warm_addresses(&mut self) {
+        self.warm_addresses = self
+            .inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([ARBSYS_ADDRESS, ARBINFO_ADDRESS, ARBOWNERPUBLIC_ADDRESS])
+            .collect();
     }
 }
 
@@ -162,7 +180,12 @@ where
     type Output = InterpreterResult;
 
     fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
-        <EthPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec)
+        let changed =
+            <EthPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec);
+        if changed {
+            self.refresh_warm_addresses();
+        }
+        changed
     }
 
     fn run(
@@ -185,12 +208,8 @@ where
         self.inner.run(context, inputs)
     }
 
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
-        Box::new(self.inner.warm_addresses().chain([
-            ARBSYS_ADDRESS,
-            ARBINFO_ADDRESS,
-            ARBOWNERPUBLIC_ADDRESS,
-        ]))
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.warm_addresses
     }
 
     fn contains(&self, address: &Address) -> bool {
@@ -227,7 +246,7 @@ where
         self.inner.run(context, inputs)
     }
 
-    fn warm_addresses(&self) -> Box<impl Iterator<Item = Address>> {
+    fn warm_addresses(&self) -> &AddressSet {
         <ArbPrecompiles as PrecompileProvider<ContextT>>::warm_addresses(&self.inner)
     }
 

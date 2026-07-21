@@ -1849,7 +1849,7 @@ impl<
                                 .map(|s| s.present_value)
                                 .unwrap_or_default(),
                             U256::from_be_bytes(value.0),
-                            0,
+                            revm::state::TransactionId::ZERO,
                         ),
                     );
                 }
@@ -2357,7 +2357,7 @@ impl<BlockT: BlockEnvTr, TxT: TransactionEnvTr, HardforkT: HardforkTr>
         };
         journal
             .warm_addresses
-            .set_precompile_addresses(self.precompiles().addresses().copied().collect());
+            .set_precompile_addresses(self.precompiles().addresses_set());
         journal
     }
 }

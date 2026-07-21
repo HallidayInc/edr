@@ -352,10 +352,6 @@ Deno.test("base fee changes by less than 12.5% between blocks", async () => {
             blockNumber: await fetchRecentBlockNumber(rpcUrl),
         },
         chainId: 42161,
-        chains: [{
-            chainId: 42161,
-            hardforks: [{ blockNumber: 0, specId: "cancun" }],
-        }],
     });
 
     const blockBeforeMine = await request(arb, { method: "eth_getBlockByNumber", params: ["latest", false] });
@@ -435,6 +431,26 @@ Deno.test("chain id override", async () => {
     assertEquals(nid, "100");
 });
 
+Deno.test("Osaka applies the transaction gas cap to implicit and explicit gas limits", async () => {
+    using ctx = new Context();
+    using p = ctx.createProvider({ chain: "l1" });
+
+    await request(p, {
+        method: "eth_call",
+        params: [{
+            to: "0x0000000000000000000000000000000000000000",
+        }, "latest"],
+    });
+
+    await assertRejects(() => request(p, {
+        method: "eth_call",
+        params: [{
+            to: "0x0000000000000000000000000000000000000000",
+            gas: "0x1000001",
+        }, "latest"],
+    }));
+});
+
 Deno.test("arbitrum fork eth_call", async () => {
     const rpcUrl = "https://arb1.arbitrum.io/rpc";
     using ctx = new Context();
@@ -445,10 +461,6 @@ Deno.test("arbitrum fork eth_call", async () => {
             blockNumber: await fetchRecentBlockNumber(rpcUrl),
         },
         chainId: 42161,
-        chains: [{
-            chainId: 42161,
-            hardforks: [{ blockNumber: 0, specId: "cancun" }],
-        }],
     });
     const call = {
         method: "eth_call",
@@ -474,10 +486,6 @@ Deno.test("story fork eth_call", async () => {
             blockNumber: await fetchRecentBlockNumber(rpcUrl),
         },
         chainId: 1514n,
-        chains: [{
-            chainId: 1514n,
-            hardforks: [{ blockNumber: 0, specId: "holocene" }],
-        }],
     });
     const call = {
         method: "eth_call",
@@ -518,10 +526,6 @@ Deno.test("fork delegate code can be restored on base", async () => {
         rpcUrl: "https://mainnet.base.org",
         chain: "op",
         chainId: 8453n,
-        chains: [{
-            chainId: 8453n,
-            hardforks: [{ blockNumber: 0, specId: "isthmus" }],
-        }],
     });
 });
 

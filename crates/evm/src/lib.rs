@@ -3,7 +3,7 @@
 
 use edr_blockchain_api::BlockHashByNumber;
 use edr_chain_config::NativeTokenMirror;
-use edr_chain_spec::{EvmSpecId, TransactionValidation};
+use edr_chain_spec::{BlockEnvExt, EvmSpecId, TransactionValidation};
 use edr_chain_spec_evm::{
     result::{ExecutionResult, ExecutionResultAndState},
     BlockEnvTrait, CfgEnv, ContextForChainSpec, DatabaseComponentError, EvmChainSpec, Inspector,
@@ -75,7 +75,7 @@ pub fn dry_run<
     // dry_run::<MyChainSpec, _, _>(...)
     // ```
     EvmChainSpecT: EvmChainSpec,
-    BlockT: BlockEnvTrait,
+    BlockT: BlockEnvTrait + BlockEnvExt,
     BlockchainT: BlockHashByNumber<Error: 'static + std::error::Error + Send + Sync>,
     StateT: State<Error: 'static + std::error::Error + Send + Sync>,
 >(
@@ -131,7 +131,7 @@ pub fn dry_run_with_inspector<
     // dry_run::<MyChainSpec, _, _, _>(...)
     // ```
     EvmChainSpecT: EvmChainSpec,
-    BlockT: BlockEnvTrait,
+    BlockT: BlockEnvTrait + BlockEnvExt,
     BlockchainT: BlockHashByNumber<Error: 'static + std::error::Error + Send + Sync>,
     InspectorT: Inspector<
         ContextForChainSpec<
@@ -196,7 +196,7 @@ pub fn guaranteed_dry_run<
     // dry_run::<MyChainSpec, _, _>(...)
     // ```
     EvmChainSpecT: EvmChainSpec,
-    BlockT: BlockEnvTrait,
+    BlockT: BlockEnvTrait + BlockEnvExt,
     BlockchainT: BlockHashByNumber<Error: 'static + std::error::Error + Send + Sync>,
     StateT: State<Error: 'static + std::error::Error + Send + Sync>,
 >(
@@ -240,7 +240,7 @@ pub fn guaranteed_dry_run_with_inspector<
     // dry_run::<MyChainSpec, _, _, _>(...)
     // ```
     EvmChainSpecT: EvmChainSpec,
-    BlockT: BlockEnvTrait,
+    BlockT: BlockEnvTrait + BlockEnvExt,
     BlockchainT: BlockHashByNumber<Error: 'static + std::error::Error + Send + Sync>,
     InspectorT: Inspector<
         ContextForChainSpec<
@@ -291,7 +291,7 @@ pub fn run<
     // dry_run::<MyChainSpec, _, _>(...)
     // ```
     EvmChainSpecT: EvmChainSpec,
-    BlockT: BlockEnvTrait,
+    BlockT: BlockEnvTrait + BlockEnvExt,
     BlockchainT: BlockHashByNumber<Error: 'static + std::error::Error + Send + Sync>,
     StateT: State<Error: 'static + std::error::Error + Send + Sync> + StateCommit,
 >(

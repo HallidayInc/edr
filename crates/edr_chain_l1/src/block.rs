@@ -840,7 +840,7 @@ impl<
     fn add_transaction_with_inspector<InspectorT>(
         &mut self,
         transaction: ChainSpecT::SignedTransaction,
-        inspector: &mut InspectorT,
+        mut inspector: &mut InspectorT,
     ) -> Result<
         (),
         BlockTransactionError<
@@ -858,7 +858,7 @@ impl<
                         &'inspector dyn Blockchain<
                             BlockReceiptT,
                             BlockT,
-                            Self::BlockchainError,
+                            BlockchainErrorT,
                             ChainSpecT::Hardfork,
                             LocalBlockT,
                             ChainSpecT::SignedTransaction,
@@ -869,7 +869,7 @@ impl<
             >,
         >,
     {
-        Self::add_transaction_with_inspector(self, transaction, inspector)
+        EthBlockBuilder::add_transaction_with_inspector(self, transaction, &mut inspector)
     }
 
     fn finalize_block(

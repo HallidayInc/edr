@@ -20,7 +20,7 @@ use edr_chain_config::{
 };
 use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
-use edr_chain_spec_provider::ProviderChainSpec;
+use edr_eip7825::transaction_gas_cap_for_hardfork;
 use edr_generic::{ApeChainSpec, ArbChainSpec, GenericChainSpec, APE_PRECOMPILE_STATE_ADDRESS};
 use edr_op::{self, OpChainSpec};
 use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
@@ -347,24 +347,25 @@ fn seed_ape_precompile_state(
 fn parse_l1_spec_id(name: &str) -> Option<l1::Hardfork> {
     match name.to_ascii_lowercase().as_str() {
         "frontier" => Some(l1::Hardfork::FRONTIER),
-        "frontierthawing" | "frontier_thawing" => Some(l1::Hardfork::FRONTIER_THAWING),
+        "frontierthawing" | "frontier_thawing" => Some(l1::Hardfork::FRONTIER),
         "homestead" => Some(l1::Hardfork::HOMESTEAD),
-        "daofork" | "dao_fork" => Some(l1::Hardfork::DAO_FORK),
+        "daofork" | "dao_fork" => Some(l1::Hardfork::HOMESTEAD),
         "tangerine" => Some(l1::Hardfork::TANGERINE),
         "spuriousdragon" | "spurious_dragon" => Some(l1::Hardfork::SPURIOUS_DRAGON),
         "byzantium" => Some(l1::Hardfork::BYZANTIUM),
-        "constantinople" => Some(l1::Hardfork::CONSTANTINOPLE),
+        "constantinople" => Some(l1::Hardfork::PETERSBURG),
         "petersburg" => Some(l1::Hardfork::PETERSBURG),
         "istanbul" => Some(l1::Hardfork::ISTANBUL),
-        "muirglacier" | "muir_glacier" => Some(l1::Hardfork::MUIR_GLACIER),
+        "muirglacier" | "muir_glacier" => Some(l1::Hardfork::ISTANBUL),
         "berlin" => Some(l1::Hardfork::BERLIN),
         "london" => Some(l1::Hardfork::LONDON),
-        "arrowglacier" | "arrow_glacier" => Some(l1::Hardfork::ARROW_GLACIER),
-        "grayglacier" | "gray_glacier" => Some(l1::Hardfork::GRAY_GLACIER),
+        "arrowglacier" | "arrow_glacier" => Some(l1::Hardfork::LONDON),
+        "grayglacier" | "gray_glacier" => Some(l1::Hardfork::LONDON),
         "merge" => Some(l1::Hardfork::MERGE),
         "shanghai" => Some(l1::Hardfork::SHANGHAI),
         "cancun" => Some(l1::Hardfork::CANCUN),
         "prague" => Some(l1::Hardfork::PRAGUE),
+        "osaka" => Some(l1::Hardfork::OSAKA),
         _ => None,
     }
 }
@@ -397,12 +398,6 @@ fn parse_op_spec_id(name: &str) -> Option<edr_op::Hardfork> {
         "isthmus" => Some(edr_op::Hardfork::ISTHMUS),
         _ => None,
     }
-}
-
-fn default_l1_activations() -> Option<HardforkActivations<l1::Hardfork>> {
-    L1ChainSpec::chain_configs()
-        .get(&1)
-        .map(|config| config.hardfork_activations.clone())
 }
 
 #[derive(Deserialize)]
@@ -584,11 +579,20 @@ fn insert_native_token_mirror_override<HardforkT>(
         });
 }
 
-fn insert_default_l1_activations<HardforkT: Clone>(
+fn apply_compatibility_hardfork<HardforkT>(
     chain_overrides: &mut HashMap<u64, ChainOverride<HardforkT>>,
     chain_id: u64,
-    activations: &HardforkActivations<HardforkT>,
-) {
+    hardfork: HardforkT,
+) where
+    HardforkT: Clone,
+{
+    let activations = HardforkActivations::new(vec![HardforkActivation {
+        condition: ForkCondition::Block(0),
+        hardfork: hardfork.clone(),
+    }]);
+
+    // In compatibility mode, remote and locally mined blocks use the same
+    // hardfork unless the caller supplied an activation history for this chain.
     chain_overrides
         .entry(chain_id)
         .and_modify(|chain_override| {
@@ -599,8 +603,25 @@ fn insert_default_l1_activations<HardforkT: Clone>(
         .or_insert_with(|| ChainOverride {
             name: String::new(),
             native_token_mirror: None,
-            hardfork_activation_overrides: Some(activations.clone()),
+            hardfork_activation_overrides: Some(activations),
         });
+}
+
+fn apply_transaction_gas_cap<HardforkT>(
+    config: &mut edr_provider::config::ProviderConfig<HardforkT>,
+    transaction_gas_cap: Option<u64>,
+) {
+    if let Some(transaction_gas_cap) = transaction_gas_cap {
+        config.default_transaction_gas_limit = NonZeroU64::new(
+            config
+                .default_transaction_gas_limit
+                .get()
+                .min(transaction_gas_cap),
+        )
+        .expect("transaction gas cap must be non-zero");
+    }
+
+    config.transaction_gas_cap = transaction_gas_cap;
 }
 
 #[derive(Clone, Deserialize)]
@@ -1051,6 +1072,9 @@ pub fn provider_new(
                 chain_id,
                 opts.native_token_mirror.as_ref(),
             );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1152,6 +1176,9 @@ pub fn provider_new(
                 chain_id,
                 opts.native_token_mirror.as_ref(),
             );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1242,16 +1269,14 @@ pub fn provider_new(
                 cfg.chain_overrides
                     .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
-            if !cfg.chain_overrides.contains_key(&chain_id)
-                && let Some(acts) = default_l1_activations()
-            {
-                insert_default_l1_activations(&mut cfg.chain_overrides, chain_id, &acts);
-            }
             insert_native_token_mirror_override(
                 &mut cfg.chain_overrides,
                 chain_id,
                 opts.native_token_mirror.as_ref(),
             );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1342,16 +1367,14 @@ pub fn provider_new(
                 cfg.chain_overrides
                     .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
-            if !cfg.chain_overrides.contains_key(&chain_id)
-                && let Some(acts) = default_l1_activations()
-            {
-                insert_default_l1_activations(&mut cfg.chain_overrides, chain_id, &acts);
-            }
             insert_native_token_mirror_override(
                 &mut cfg.chain_overrides,
                 chain_id,
                 opts.native_token_mirror.as_ref(),
             );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }
@@ -1442,16 +1465,14 @@ pub fn provider_new(
                 cfg.chain_overrides
                     .extend(self::chain_overrides(chains, parse_l1_spec_id));
             }
-            if !cfg.chain_overrides.contains_key(&chain_id)
-                && let Some(acts) = default_l1_activations()
-            {
-                insert_default_l1_activations(&mut cfg.chain_overrides, chain_id, &acts);
-            }
             insert_native_token_mirror_override(
                 &mut cfg.chain_overrides,
                 chain_id,
                 opts.native_token_mirror.as_ref(),
             );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+            apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
             if !owned_accounts.is_empty() {
                 cfg.owned_accounts = owned_accounts.clone();
             }

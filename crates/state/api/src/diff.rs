@@ -21,12 +21,10 @@ impl StateDiff {
             .and_modify(|account| {
                 account.info = account_info.clone();
             })
-            .or_insert(Account {
-                info: account_info.clone(),
-                original_info: Box::new(account_info),
-                storage: EvmStorage::default(),
-                status: AccountStatus::Touched,
-                transaction_id: 0,
+            .or_insert_with(|| {
+                let mut account = Account::from(account_info);
+                account.status = AccountStatus::Touched;
+                account
             });
     }
 
@@ -52,19 +50,16 @@ impl StateDiff {
                 let storage: EvmStorage = std::iter::once((index, slot.clone())).collect();
 
                 let info = account_info.unwrap_or_default();
-                Account {
-                    info: info.clone(),
-                    original_info: Box::new(info),
-                    storage,
-                    // Storage changes to pre-existing accounts must not flag the
-                    // account as `Created`; doing so causes `PersistentStateTrie::commit`
-                    // to wipe the account's entire storage trie and re-insert only
-                    // the slots present in the diff, destroying unrelated state
-                    // (notably mirror-token slots for other addresses on chains
-                    // configured with `native_token_mirror`).
-                    status: AccountStatus::Touched,
-                    transaction_id: 0,
-                }
+                let mut account = Account::from(info);
+                account.storage = storage;
+                // Storage changes to pre-existing accounts must not flag the
+                // account as `Created`; doing so causes `PersistentStateTrie::commit`
+                // to wipe the account's entire storage trie and re-insert only
+                // the slots present in the diff, destroying unrelated state
+                // (notably mirror-token slots for other addresses on chains
+                // configured with `native_token_mirror`).
+                account.status = AccountStatus::Touched;
+                account
             });
     }
 

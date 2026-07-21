@@ -5,7 +5,8 @@ pub use alloy_eips::eip4895::Withdrawal;
 use alloy_eips::eip7840::BlobParams;
 use alloy_trie::root::ordered_trie_root;
 use edr_chain_spec::{
-    BlobExcessGasAndPrice, BlockEnvConstructor, BlockEnvForHardfork, BlockEnvTrait, EvmSpecId,
+    BlobExcessGasAndPrice, BlockEnvConstructor, BlockEnvExt, BlockEnvForHardfork, BlockEnvTrait,
+    EvmSpecId,
 };
 use edr_eip1559::BaseFeeParams;
 pub use edr_eip4844::BlobGas;
@@ -17,6 +18,21 @@ use edr_primitives::{
 
 pub use self::overrides::HeaderOverrides;
 use crate::difficulty::calculate_ethash_canonical_difficulty;
+
+/// Chain-specific execution metadata that is not part of Ethereum's header
+/// encoding.
+///
+/// This data is carried alongside a header so chain adapters can construct
+/// their native execution environments without changing Ethereum block hashes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TempoExecutionMetadata {
+    /// Sub-second (milliseconds) portion of the block timestamp.
+    pub timestamp_millis_part: u64,
+    /// Number of blocks in a consensus epoch.
+    pub epoch_length: std::num::NonZeroU64,
+    /// Proposer's Ed25519 public key for post-T4 blocks.
+    pub proposer_public_key: Option<B256>,
+}
 
 /// ethereum block header
 #[derive(
@@ -84,6 +100,10 @@ pub struct BlockHeader {
     ///
     /// [EIP-7928](https://eips.ethereum.org/EIPS/eip-7928)
     pub block_access_list_hash: Option<B256>,
+    /// Tempo execution metadata, carried out of band from Ethereum RLP.
+    #[rlp(skip, default)]
+    #[serde(skip)]
+    pub tempo_execution: Option<TempoExecutionMetadata>,
 }
 
 impl BlockHeader {
@@ -112,6 +132,7 @@ impl BlockHeader {
             parent_beacon_block_root: partial_header.parent_beacon_block_root,
             requests_hash: partial_header.requests_hash,
             block_access_list_hash: partial_header.block_access_list_hash,
+            tempo_execution: partial_header.tempo_execution,
         }
     }
 
@@ -209,6 +230,21 @@ impl<HardforkT: Into<EvmSpecId>> BlockEnvForHardfork<HardforkT> for BlockHeader 
             )
         })
     }
+
+    fn timestamp_millis_part_for_hardfork(&self, _hardfork: HardforkT) -> u64 {
+        self.tempo_execution
+            .map_or(0, |metadata| metadata.timestamp_millis_part)
+    }
+
+    fn epoch_length_for_hardfork(&self, _hardfork: HardforkT) -> std::num::NonZeroU64 {
+        self.tempo_execution
+            .map_or(std::num::NonZeroU64::MIN, |metadata| metadata.epoch_length)
+    }
+
+    fn proposer_public_key_for_hardfork(&self, _hardfork: HardforkT) -> Option<B256> {
+        self.tempo_execution
+            .and_then(|metadata| metadata.proposer_public_key)
+    }
 }
 
 /// Wrapper type combining a header with its associated hardfork.
@@ -274,6 +310,23 @@ impl<HardforkT: Copy + Into<EvmSpecId>, BlockHeaderT: BlockEnvForHardfork<Hardfo
     }
 }
 
+impl<HardforkT: Copy + Into<EvmSpecId>, BlockHeaderT: BlockEnvForHardfork<HardforkT>> BlockEnvExt
+    for HeaderAndEvmSpec<'_, BlockHeaderT, HardforkT>
+{
+    fn timestamp_millis_part(&self) -> u64 {
+        self.header
+            .timestamp_millis_part_for_hardfork(self.hardfork)
+    }
+
+    fn epoch_length(&self) -> std::num::NonZeroU64 {
+        self.header.epoch_length_for_hardfork(self.hardfork)
+    }
+
+    fn proposer_public_key(&self) -> Option<B256> {
+        self.header.proposer_public_key_for_hardfork(self.hardfork)
+    }
+}
+
 /// Partial header definition without ommers hash and transactions root
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartialHeader {
@@ -323,6 +376,8 @@ pub struct PartialHeader {
     ///
     /// [EIP-7928](https://eips.ethereum.org/EIPS/eip-7928)
     pub block_access_list_hash: Option<B256>,
+    /// Tempo execution metadata, carried out of band from Ethereum RLP.
+    pub tempo_execution: Option<TempoExecutionMetadata>,
 }
 
 impl PartialHeader {
@@ -504,6 +559,7 @@ impl PartialHeader {
             } else {
                 None
             },
+            tempo_execution: None,
         }
     }
 }
@@ -531,6 +587,7 @@ impl From<BlockHeader> for PartialHeader {
             parent_beacon_block_root: header.parent_beacon_block_root,
             requests_hash: header.requests_hash,
             block_access_list_hash: header.block_access_list_hash,
+            tempo_execution: header.tempo_execution,
         }
     }
 }
@@ -583,6 +640,21 @@ impl<HardforkT: Into<EvmSpecId>> BlockEnvForHardfork<HardforkT> for PartialHeade
                 scheduled_blob_params,
             )
         })
+    }
+
+    fn timestamp_millis_part_for_hardfork(&self, _hardfork: HardforkT) -> u64 {
+        self.tempo_execution
+            .map_or(0, |metadata| metadata.timestamp_millis_part)
+    }
+
+    fn epoch_length_for_hardfork(&self, _hardfork: HardforkT) -> std::num::NonZeroU64 {
+        self.tempo_execution
+            .map_or(std::num::NonZeroU64::MIN, |metadata| metadata.epoch_length)
+    }
+
+    fn proposer_public_key_for_hardfork(&self, _hardfork: HardforkT) -> Option<B256> {
+        self.tempo_execution
+            .and_then(|metadata| metadata.proposer_public_key)
     }
 }
 
@@ -740,6 +812,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: Some(B256::random()),
             block_access_list_hash: Some(B256::random()),
+            tempo_execution: None,
         };
 
         let encoded = alloy_rlp::encode(&header);
@@ -780,6 +853,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: None,
             block_access_list_hash: None,
+            tempo_execution: None,
         };
         let encoded = alloy_rlp::encode(&header);
         assert_eq!(encoded, expected);
@@ -828,6 +902,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: None,
             block_access_list_hash: None,
+            tempo_execution: None,
         };
         assert_eq!(header.hash(), expected_hash);
     }
@@ -859,6 +934,7 @@ mod tests {
             parent_beacon_block_root: None,
             requests_hash: None,
             block_access_list_hash: None,
+            tempo_execution: None,
         };
         let decoded = BlockHeader::decode(&mut data.as_slice()).unwrap();
         assert_eq!(decoded, expected);
@@ -909,6 +985,7 @@ mod tests {
             withdrawals_root: Some(KECCAK_NULL_RLP),
             requests_hash: None,
             block_access_list_hash: None,
+            tempo_execution: None,
         };
 
         let encoded = alloy_rlp::encode(&header);
@@ -969,6 +1046,7 @@ mod tests {
             ommers_hash: KECCAK_RLP_EMPTY_ARRAY,
             withdrawals_root: Some(KECCAK_NULL_RLP),
             block_access_list_hash: None,
+            tempo_execution: None,
         };
 
         let encoded = alloy_rlp::encode(&header);

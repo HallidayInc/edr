@@ -331,30 +331,16 @@ impl<
                         add_history_storage_contract_to_state_diff(&mut state_override.diff);
                     })
                     .or_insert_with(|| {
-                        let beacon_root_account = beacon_roots_contract();
-                        let history_storage_account = history_storage_contract();
+                        let mut beacon_root_account = Account::from(beacon_roots_contract());
+                        beacon_root_account.status =
+                            AccountStatus::Created | AccountStatus::Touched;
+                        let mut history_storage_account = Account::from(history_storage_contract());
+                        history_storage_account.status =
+                            AccountStatus::Created | AccountStatus::Touched;
 
                         let accounts: EvmState = [
-                            (
-                                BEACON_ROOTS_ADDRESS,
-                                Account {
-                                    info: beacon_root_account.clone(),
-                                    original_info: Box::new(beacon_root_account),
-                                    status: AccountStatus::Created | AccountStatus::Touched,
-                                    storage: HashMap::default(),
-                                    transaction_id: 0,
-                                },
-                            ),
-                            (
-                                HISTORY_STORAGE_ADDRESS,
-                                Account {
-                                    info: history_storage_account.clone(),
-                                    original_info: Box::new(history_storage_account),
-                                    status: AccountStatus::Created | AccountStatus::Touched,
-                                    storage: HashMap::default(),
-                                    transaction_id: 0,
-                                },
-                            ),
+                            (BEACON_ROOTS_ADDRESS, beacon_root_account),
+                            (HISTORY_STORAGE_ADDRESS, history_storage_account),
                         ]
                         .into_iter()
                         .collect();
@@ -375,19 +361,12 @@ impl<
                         add_beacon_roots_contract_to_state_diff(&mut state_override.diff);
                     })
                     .or_insert_with(|| {
-                        let beacon_root_account = beacon_roots_contract();
-                        let accounts: EvmState = [(
-                            BEACON_ROOTS_ADDRESS,
-                            Account {
-                                info: beacon_root_account.clone(),
-                                original_info: Box::new(beacon_root_account),
-                                status: AccountStatus::Created | AccountStatus::Touched,
-                                storage: HashMap::default(),
-                                transaction_id: 0,
-                            },
-                        )]
-                        .into_iter()
-                        .collect();
+                        let mut beacon_root_account = Account::from(beacon_roots_contract());
+                        beacon_root_account.status =
+                            AccountStatus::Created | AccountStatus::Touched;
+                        let accounts: EvmState = [(BEACON_ROOTS_ADDRESS, beacon_root_account)]
+                            .into_iter()
+                            .collect();
 
                         StateOverride {
                             diff: StateDiff::from(accounts),

@@ -5,7 +5,7 @@ pub mod interpreter;
 pub mod result;
 
 use edr_chain_spec::{
-    ChainSpec, ContextChainSpec, EvmTransactionValidationError, HardforkChainSpec,
+    BlockEnvExt, ChainSpec, ContextChainSpec, EvmTransactionValidationError, HardforkChainSpec,
     TransactionValidation,
 };
 pub use edr_database_components::DatabaseComponentError;
@@ -14,21 +14,14 @@ pub use revm_context::{
     Evm, Journal, JournalEntry, JournalTr as JournalTrait, LocalContext,
 };
 pub use revm_handler::{ExecuteEvm, PrecompileProvider};
-use revm_inspector::NoOpInspector;
-pub use revm_inspector::{InspectEvm, Inspector};
+pub use revm_inspector::{InspectEvm, Inspector, JournalExt, NoOpInspector};
 
 pub use self::error::{TransactionError, TransactionErrorForChainSpec};
 pub use crate::{interpreter::InterpreterResult, result::ExecutionResultAndState};
 
 /// Helper type for a chain-specific [`Context`].
-pub type ContextForChainSpec<ChainSpecT, BlockEnvT, DatabaseT> = Context<
-    BlockEnvT,
-    <ChainSpecT as ChainSpec>::SignedTransaction,
-    CfgEnv<<ChainSpecT as HardforkChainSpec>::Hardfork>,
-    DatabaseT,
-    Journal<DatabaseT>,
-    <ChainSpecT as ContextChainSpec>::Context,
->;
+pub type ContextForChainSpec<ChainSpecT, BlockEnvT, DatabaseT> =
+    <ChainSpecT as EvmChainSpec>::EvmContext<BlockEnvT, DatabaseT>;
 
 /// Trait for specifying the types for running a transaction in a chain's
 /// associated EVM.
@@ -40,14 +33,23 @@ pub trait EvmChainSpec:
     > + ContextChainSpec
     + HardforkChainSpec
 {
+    /// Concrete REVM context used by this chain.
+    ///
+    /// Most chains use the standard Ethereum context. Chains with a custom
+    /// execution engine, such as Tempo, can select their native context here.
+    type EvmContext<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>: ContextTrait<
+        Db = DatabaseT,
+        Journal: JournalExt,
+    >;
+
     /// Type representing a precompile provider.
-    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database>: PrecompileProvider<
+    type PrecompileProvider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>: PrecompileProvider<
         ContextForChainSpec<Self, BlockT, DatabaseT>,
         Output = InterpreterResult,
     >;
 
     /// Constructs the precompile provider for the given hardfork.
-    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database>(
+    fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT>;
 
@@ -55,8 +57,8 @@ pub trait EvmChainSpec:
     /// changes.
     #[allow(clippy::type_complexity)]
     fn dry_run<
-        BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        BlockT: BlockEnvTrait + BlockEnvExt,
+        DatabaseT: Database + core::fmt::Debug,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,
             Output = InterpreterResult,
@@ -90,8 +92,8 @@ pub trait EvmChainSpec:
     /// changes, while an inspector is observing the execution.
     #[allow(clippy::type_complexity)]
     fn dry_run_with_inspector<
-        BlockT: BlockEnvTrait,
-        DatabaseT: Database,
+        BlockT: BlockEnvTrait + BlockEnvExt,
+        DatabaseT: Database + core::fmt::Debug,
         InspectorT: Inspector<ContextForChainSpec<Self, BlockT, DatabaseT>>,
         PrecompileProviderT: PrecompileProvider<
             ContextForChainSpec<Self, BlockT, DatabaseT>,

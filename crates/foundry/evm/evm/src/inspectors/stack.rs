@@ -3,6 +3,10 @@ use std::{
     sync::Arc,
 };
 
+use super::{
+    Cheatcodes, CheatsConfig, EdgeCovInspector, Fuzzer, LineCoverageCollector, LogCollector,
+    RevertDiagnostic, TracingInspector,
+};
 use alloy_primitives::{map::AddressHashMap, Address, Bytes, Log, TxKind, U256};
 use derive_where::derive_where;
 use edr_coverage::CodeCoverageReporter;
@@ -29,12 +33,6 @@ use revm::{
     },
     state::{AccountStatus, EvmState},
     DatabaseCommit, InspectEvm as _, Inspector, Journal, JournalEntry,
-};
-use revm_inspectors::edge_cov::EdgeCovInspector;
-
-use super::{
-    Cheatcodes, CheatsConfig, Fuzzer, LineCoverageCollector, LogCollector, RevertDiagnostic,
-    TracingInspector,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -592,8 +590,7 @@ impl<
                 .unwrap_or_default(),
             traces,
             line_coverage: line_coverage.map(foundry_evm_coverage::LineCoverageCollector::finish),
-            edge_coverage: edge_coverage
-                .map(revm_inspectors::edge_cov::EdgeCovInspector::into_hitcount),
+            edge_coverage: edge_coverage.map(EdgeCovInspector::into_hitcount),
             cheatcodes,
             reverter,
         })
@@ -1367,6 +1364,7 @@ impl<
                                 memory_offset: call.return_memory_offset.clone(),
                                 was_precompile_called: false,
                                 precompile_call_logs: vec![],
+                                charged_new_account_state_gas: call.charged_new_account_state_gas,
                             });
                         }
                     };
@@ -1400,6 +1398,7 @@ impl<
                         memory_offset: call.return_memory_offset.clone(),
                         was_precompile_called: true,
                         precompile_call_logs: vec![],
+                        charged_new_account_state_gas: call.charged_new_account_state_gas,
                     });
                 }
                 // Mark accounts and storage cold before STATICCALLs
