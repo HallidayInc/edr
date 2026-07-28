@@ -148,6 +148,11 @@ pub trait ProviderSpec<TimerT: Clone + TimeSinceEpoch>:
     /// This is implemented as an associated function to avoid problems when
     /// implementing type conversions for third-party types.
     fn cast_halt_reason(reason: Self::HaltReason) -> TransactionFailureReason<Self::HaltReason>;
+
+    /// Returns a resolver for chain-native state exposed through precompiles.
+    fn remote_storage_resolver() -> Option<edr_state_remote::RemoteStorageResolver> {
+        None
+    }
 }
 
 impl<TimerT: Clone + TimeSinceEpoch> ProviderSpec<TimerT> for L1ChainSpec {

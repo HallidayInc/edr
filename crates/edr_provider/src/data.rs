@@ -3047,16 +3047,19 @@ fn create_forked_blockchain_and_state<
     let (blockchain, mut irregular_state) =
         tokio::task::block_in_place(|| -> Result<_, ForkedCreationError<ChainSpecT::Hardfork>> {
             let mut irregular_state = IrregularState::default();
-            let blockchain = runtime.block_on(ForkedBlockchainForChainSpec::<ChainSpecT>::new(
-                block_config.hardfork,
-                runtime.clone(),
-                rpc_client.clone(),
-                &mut irregular_state,
-                state_root_generator.clone(),
-                &chain_configs,
-                fork_config.block_number,
-                Some(config.chain_id),
-            ))?;
+            let blockchain = runtime.block_on(
+                ForkedBlockchainForChainSpec::<ChainSpecT>::new_with_storage_resolver(
+                    block_config.hardfork,
+                    runtime.clone(),
+                    rpc_client.clone(),
+                    &mut irregular_state,
+                    state_root_generator.clone(),
+                    &chain_configs,
+                    fork_config.block_number,
+                    Some(config.chain_id),
+                    ChainSpecT::remote_storage_resolver(),
+                ),
+            )?;
 
             Ok((blockchain, irregular_state))
         })?;

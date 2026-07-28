@@ -810,6 +810,110 @@ Deno.test("stable native token mirror links real ERC20 storage to native balance
     );
 });
 
+Deno.test("Injective Bank precompile journals balances and preserves supply", async () => {
+    function balanceSlot(address: string) {
+        const prefix = "4544525f494e4a5f42414c5f"; // "EDR_INJ_BAL_"
+        return `0x${prefix}${address.toLowerCase().replace(/^0x/, "")}`;
+    }
+    const bank = "0x0000000000000000000000000000000000000064";
+    const token = "0x0000000000000000000000000000000000001776";
+    const sender = "0x00000000000000000000000000000000000000aA";
+    const recipient = "0x00000000000000000000000000000000000000bB";
+    const initialBalance = 100n;
+    const amount = 40n;
+    const totalSupply = 1_000n;
+    const totalSupplySlot = bytesToHex(
+        keccak_256(new TextEncoder().encode("edr.injective.bank.totalSupply")),
+    );
+
+    using ctx = new Context();
+    using provider = ctx.createProvider({ chain: "injective" });
+
+    await request(provider, {
+        method: "hardhat_setStorageAt",
+        params: [token, balanceSlot(sender), `0x${encodeUintArg(initialBalance)}`],
+    });
+    await request(provider, {
+        method: "hardhat_setStorageAt",
+        params: [token, totalSupplySlot, `0x${encodeUintArg(totalSupply)}`],
+    });
+
+    const balanceOf = (account: string) =>
+        request(provider, {
+            method: "eth_call",
+            params: [{
+                to: bank,
+                data: `${selector("balanceOf(address,address)")}${encodeAddressArg(token)}${encodeAddressArg(account)}`,
+            }, "latest"],
+        });
+
+    assertEquals(decodeFirstWord(await balanceOf(sender)), initialBalance);
+    assertEquals(decodeFirstWord(await balanceOf(recipient)), 0n);
+
+    await request(provider, {
+        method: "hardhat_impersonateAccount",
+        params: [token],
+    });
+    await request(provider, {
+        method: "hardhat_setBalance",
+        params: [token, toRpcQuantity(10n ** 18n)],
+    });
+    const transactionHash = await request(provider, {
+        method: "eth_sendTransaction",
+        params: [{
+            from: token,
+            to: bank,
+            data: `${selector("transfer(address,address,uint256)")}${encodeAddressArg(sender)}${encodeAddressArg(recipient)}${encodeUintArg(amount)}`,
+            gas: "0x493e0",
+        }],
+    });
+    const receipt = await request(provider, {
+        method: "eth_getTransactionReceipt",
+        params: [transactionHash],
+    });
+    assertEquals(BigInt(receipt.status), 1n);
+
+    assertEquals(decodeFirstWord(await balanceOf(sender)), initialBalance - amount);
+    assertEquals(decodeFirstWord(await balanceOf(recipient)), amount);
+
+    const supply = await request(provider, {
+        method: "eth_call",
+        params: [{
+            to: bank,
+            data: `${selector("totalSupply(address)")}${encodeAddressArg(token)}`,
+        }, "latest"],
+    });
+    assertEquals(decodeFirstWord(supply), totalSupply);
+});
+
+Deno.test("Injective fork resolves native USDC supply at the fork block", async () => {
+    const rpcUrl = "https://sentry.evm-rpc.injective.network/";
+    const usdc = "0xa00C59fF5a080D2b954d0c75e46E22a0c371235a";
+    const data = selector("totalSupply()");
+
+    using ctx = new Context();
+    using provider = ctx.createProvider({
+        chain: "injective",
+        fork: { jsonRpcUrl: rpcUrl },
+    });
+
+    const forkBlock = await request(provider, {
+        method: "eth_blockNumber",
+        params: [],
+    });
+    const expected = await rpcRequest(rpcUrl, {
+        method: "eth_call",
+        params: [{ to: usdc, data }, forkBlock],
+    });
+    const actual = await request(provider, {
+        method: "eth_call",
+        params: [{ to: usdc, data }, "latest"],
+    });
+
+    assertEquals(actual, expected);
+    assert(decodeFirstWord(actual) > 0n);
+});
+
 Deno.test("native token mirror preserves unrelated token storage after mining", async () => {
     const token = "0x0000000000000000000000000000000000007000";
     const accountA = "0x00000000000000000000000000000000000000aA";

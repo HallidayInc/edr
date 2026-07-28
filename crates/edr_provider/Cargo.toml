@@ -51,6 +51,7 @@ edr_runtime.workspace = true
 edr_signer.workspace = true
 edr_solidity.workspace = true
 edr_state_api.workspace = true
+edr_state_remote.workspace = true
 edr_test_utils = { workspace = true, optional = true }
 edr_tracing.workspace = true
 edr_transaction.workspace = true

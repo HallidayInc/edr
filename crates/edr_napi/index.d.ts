@@ -864,6 +864,10 @@ export const GENERIC_CHAIN_TYPE: string
 
 export declare function genericChainProviderFactory(): ProviderFactory
 
+export const INJECTIVE_CHAIN_TYPE: string
+
+export declare function injectiveChainProviderFactory(): ProviderFactory
+
 export const GRANITE: string
 
 export const GRAY_GLACIER: string

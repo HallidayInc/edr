@@ -42,6 +42,7 @@ use edr_state_api::{
     DynState, EvmState, StateDiff, StateOverride,
 };
 use edr_state_fork::ForkedState;
+use edr_state_remote::RemoteStorageResolver;
 use edr_utils::{random::RandomHashGenerator, CastArcFrom, CastArcInto};
 use parking_lot::Mutex;
 use tokio::runtime;
@@ -199,6 +200,7 @@ pub struct ForkedBlockchain<
     /// The chain id of the remote blockchain. It might deviate from `chain_id`.
     remote_chain_id: u64,
     state_root_generator: Arc<Mutex<RandomHashGenerator>>,
+    storage_resolver: Option<RemoteStorageResolver>,
 }
 
 impl<
@@ -243,6 +245,34 @@ impl<
         chain_configs: &HashMap<ChainId, ChainConfig<HardforkT>>,
         fork_block_number: Option<u64>,
         chain_id_override: Option<u64>,
+    ) -> Result<Self, ForkedBlockchainCreationError<HardforkT>> {
+        Self::new_with_storage_resolver(
+            hardfork,
+            runtime,
+            rpc_client,
+            irregular_state,
+            state_root_generator,
+            chain_configs,
+            fork_block_number,
+            chain_id_override,
+            None,
+        )
+        .await
+    }
+
+    /// Constructs a new instance with a virtual storage resolver.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_storage_resolver(
+        hardfork: HardforkT,
+        runtime: runtime::Handle,
+        rpc_client: Arc<EthRpcClient<RpcBlockChainSpecT, RpcReceiptT, RpcTransactionT>>,
+        irregular_state: &mut IrregularState,
+        state_root_generator: Arc<Mutex<RandomHashGenerator>>,
+        chain_configs: &HashMap<ChainId, ChainConfig<HardforkT>>,
+        fork_block_number: Option<u64>,
+        chain_id_override: Option<u64>,
+        storage_resolver: Option<RemoteStorageResolver>,
     ) -> Result<Self, ForkedBlockchainCreationError<HardforkT>> {
         let ForkMetadata {
             chain_id: remote_chain_id,
@@ -386,6 +416,7 @@ impl<
             network_id,
             hardfork,
             hardfork_activations,
+            storage_resolver,
             _phantom: PhantomData,
         })
     }
@@ -1085,12 +1116,13 @@ impl<
                 .state_root
         };
 
-        let mut state = ForkedState::new(
+        let mut state = ForkedState::new_with_storage_resolver(
             self.runtime().clone(),
             self.remote.client().clone(),
             self.state_root_generator.clone(),
             block_number,
             state_root,
+            self.storage_resolver,
         );
 
         let (first_block_number, last_block_number) =

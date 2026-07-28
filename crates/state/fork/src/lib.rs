@@ -12,7 +12,7 @@ use edr_state_api::{
     StateMut as _, StateProof,
 };
 use edr_state_persistent_trie::PersistentStateTrie;
-use edr_state_remote::{CachedRemoteState, RemoteState};
+use edr_state_remote::{CachedRemoteState, RemoteState, RemoteStorageResolver};
 use edr_utils::random::RandomHashGenerator;
 use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 use serde::{de::DeserializeOwned, Serialize};
@@ -56,7 +56,31 @@ impl<
         fork_block_number: u64,
         state_root: B256,
     ) -> Self {
-        let remote_state = RemoteState::new(runtime, rpc_client, fork_block_number);
+        Self::new_with_storage_resolver(
+            runtime,
+            rpc_client,
+            hash_generator,
+            fork_block_number,
+            state_root,
+            None,
+        )
+    }
+
+    /// Constructs a new instance with a virtual storage resolver.
+    pub fn new_with_storage_resolver(
+        runtime: runtime::Handle,
+        rpc_client: Arc<EthRpcClient<RpcBlockT, RpcReceiptT, RpcTransactionT>>,
+        hash_generator: Arc<Mutex<RandomHashGenerator>>,
+        fork_block_number: u64,
+        state_root: B256,
+        storage_resolver: Option<RemoteStorageResolver>,
+    ) -> Self {
+        let remote_state = RemoteState::new_with_storage_resolver(
+            runtime,
+            rpc_client,
+            fork_block_number,
+            storage_resolver,
+        );
         let local_state = PersistentStateTrie::default();
 
         let mut state_root_to_state = HashMap::new();

@@ -17,7 +17,10 @@ use edr_state_api::account::AccountInfo;
 use futures::StreamExt;
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::{fork::ForkMetadata, request_methods::RequestMethod};
+use crate::{
+    fork::ForkMetadata,
+    request_methods::{CallRequest, RequestMethod},
+};
 
 // Constrain parallel requests to avoid rate limiting on transport level and
 // thundering herd during backoff.
@@ -67,6 +70,19 @@ impl<
     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
     pub async fn block_number(&self) -> Result<u64, RpcClientError> {
         self.inner.block_number().await
+    }
+
+    /// Calls `eth_call`.
+    #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
+    pub async fn call(
+        &self,
+        to: Address,
+        data: Bytes,
+        block: BlockSpec,
+    ) -> Result<Bytes, RpcClientError> {
+        self.inner
+            .call(RequestMethod::Call(CallRequest { to, data }, block))
+            .await
     }
 
     /// Calls `eth_chainId` and returns the chain ID.

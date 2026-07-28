@@ -24,6 +24,7 @@ The library exposes a simple context object and provider constructor. The constr
 
 - `chain`: `"l1"` (default), `"op"` for OP Stack chains like Base, or
 - `"generic"` for custom L1 forks,
+- `"injective"` for Injective forks with native Bank-backed ERC-20 support,
 - `"arb"` for Arbitrum-compatible chains, or
 - `"ape"` for ApeChain's Arbitrum-based precompile extensions, or
 - `"tempo"` for Tempo forks backed by Tempo's native execution crates
