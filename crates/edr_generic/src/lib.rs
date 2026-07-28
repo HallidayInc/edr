@@ -4,6 +4,7 @@ use edr_primitives::{address, Address};
 pub use tempo_hardfork::TempoHardfork;
 
 mod eip2718;
+mod injective_spec;
 mod precompiles;
 mod receipt;
 mod rpc;
@@ -21,6 +22,8 @@ pub const ARB_CHAIN_TYPE: &str = "arb";
 pub const APE_CHAIN_TYPE: &str = "ape";
 /// Tempo chain type.
 pub const TEMPO_CHAIN_TYPE: &str = "tempo";
+/// Injective chain type.
+pub const INJECTIVE_CHAIN_TYPE: &str = "injective";
 /// Backing account used for Ape-specific precompile state.
 pub const APE_PRECOMPILE_STATE_ADDRESS: Address =
     address!("00000000000000000000000000000000A4E50000");
@@ -49,6 +52,10 @@ pub struct ArbChainSpec;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct ApeChainSpec;
 
+/// Chain specification for Injective's EVM.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
+pub struct InjectiveChainSpec;
+
 /// Chain specification backed by Tempo's native execution crates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct TempoChainSpec;
@@ -58,6 +65,7 @@ pub trait GenericChainSpecFamily: Copy + Default {}
 impl GenericChainSpecFamily for GenericChainSpec {}
 impl GenericChainSpecFamily for ArbChainSpec {}
 impl GenericChainSpecFamily for ApeChainSpec {}
+impl GenericChainSpecFamily for InjectiveChainSpec {}
 impl GenericChainSpecFamily for TempoChainSpec {}
 
 impl edr_utils::GasEstimateAdjuster for GenericChainSpec {
@@ -81,6 +89,12 @@ impl edr_utils::GasEstimateAdjuster for ApeChainSpec {
 }
 
 impl edr_utils::GasEstimateAdjuster for TempoChainSpec {
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
+    }
+}
+
+impl edr_utils::GasEstimateAdjuster for InjectiveChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
         <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
     }

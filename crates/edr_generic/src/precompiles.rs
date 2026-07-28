@@ -4,6 +4,7 @@ use edr_chain_spec_evm::{
     handler::EthPrecompiles, ContextTrait, Database, InterpreterResult, JournalTrait as _,
 };
 use edr_primitives::{address, keccak256, Address, Bytes, B256, U256};
+use edr_state_remote::RemoteStorageCall;
 use revm_context_interface::{journaled_state::account::JournaledAccountTr, Cfg, Transaction as _};
 use revm_handler::PrecompileProvider;
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
@@ -14,6 +15,12 @@ use crate::{
 };
 
 const ARBSYS_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
+const INJECTIVE_BANK_ADDRESS: Address = address!("0000000000000000000000000000000000000064");
+const INJECTIVE_BALANCE_SLOT_PREFIX: [u8; 12] = *b"EDR_INJ_BAL_";
+const INJECTIVE_BANK_READ_GAS: u64 = 10_000;
+const INJECTIVE_BANK_TRANSFER_GAS: u64 = 150_000;
+const INJECTIVE_BANK_MINT_BURN_GAS: u64 = 200_000;
+const INJECTIVE_WRITE_COST_PER_BYTE: u64 = 30;
 const ARBINFO_ADDRESS: Address = address!("0000000000000000000000000000000000000065");
 const ARBOWNERPUBLIC_ADDRESS: Address = address!("000000000000000000000000000000000000006b");
 const ARBSYS_STATE_ADDRESS: Address = address!("00000000000000000000000000000000A4B05A11");
@@ -22,6 +29,14 @@ const PARTIALS_SLOT_START: u64 = 2;
 const APE_DEFAULT_SHARE_PRICE: u64 = 1;
 
 sol! {
+    interface InjectiveBank {
+        function balanceOf(address token, address account) external view returns (uint256);
+        function totalSupply(address token) external view returns (uint256);
+        function transfer(address sender, address recipient, uint256 amount) external payable returns (bool);
+        function mint(address actor, uint256 amount) external payable returns (bool);
+        function burn(address actor, uint256 amount) external payable returns (bool);
+    }
+
     interface ArbInfo {
         function getBalance(address account) external view returns (uint256);
         function getCode(address account) external view returns (bytes memory);
@@ -118,7 +133,345 @@ use self::{
         sendTxToL1Call, wasMyCallersAddressAliasedCall, withdrawEthCall, InvalidBlockNumber,
         L2ToL1Tx, SendMerkleUpdate,
     },
+    InjectiveBank::{
+        balanceOfCall as bankBalanceOfCall, burnCall as bankBurnCall, mintCall as bankMintCall,
+        totalSupplyCall as bankTotalSupplyCall, transferCall as bankTransferCall,
+    },
 };
+
+/// Injective precompile provider.
+///
+/// This keeps Ethereum's built-in precompiles and adds Injective's native Bank
+/// module at address `0x64`.
+#[derive(Debug, Clone)]
+pub struct InjectivePrecompiles {
+    inner: EthPrecompiles,
+    warm_addresses: AddressSet,
+}
+
+impl InjectivePrecompiles {
+    pub fn new(spec: edr_chain_spec::EvmSpecId) -> Self {
+        let inner = EthPrecompiles::new(spec);
+        let warm_addresses = inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([INJECTIVE_BANK_ADDRESS])
+            .collect();
+        Self {
+            inner,
+            warm_addresses,
+        }
+    }
+
+    fn refresh_warm_addresses(&mut self) {
+        self.warm_addresses = self
+            .inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([INJECTIVE_BANK_ADDRESS])
+            .collect();
+    }
+}
+
+impl<ContextT> PrecompileProvider<ContextT> for InjectivePrecompiles
+where
+    ContextT: ContextTrait,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
+        let changed =
+            <EthPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec);
+        if changed {
+            self.refresh_warm_addresses();
+        }
+        changed
+    }
+
+    fn run(
+        &mut self,
+        context: &mut ContextT,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        if inputs.bytecode_address == INJECTIVE_BANK_ADDRESS {
+            return run_injective_bank(context, inputs).map(Some);
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.warm_addresses
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        *address == INJECTIVE_BANK_ADDRESS || self.inner.contains(address)
+    }
+}
+
+pub(crate) fn injective_remote_storage_call(
+    token: Address,
+    slot: U256,
+) -> Option<RemoteStorageCall> {
+    let data = if slot == injective_total_supply_slot() {
+        bankTotalSupplyCall { token }.abi_encode()
+    } else {
+        let account = injective_balance_account(slot)?;
+        bankBalanceOfCall { token, account }.abi_encode()
+    };
+
+    Some(RemoteStorageCall {
+        to: INJECTIVE_BANK_ADDRESS,
+        data: data.into(),
+    })
+}
+
+fn injective_balance_slot(account: Address) -> U256 {
+    let mut bytes = [0u8; 32];
+    bytes[..INJECTIVE_BALANCE_SLOT_PREFIX.len()].copy_from_slice(&INJECTIVE_BALANCE_SLOT_PREFIX);
+    bytes[INJECTIVE_BALANCE_SLOT_PREFIX.len()..].copy_from_slice(account.as_slice());
+    U256::from_be_bytes(bytes)
+}
+
+fn injective_balance_account(slot: U256) -> Option<Address> {
+    let bytes = slot.to_be_bytes::<32>();
+    if bytes[..INJECTIVE_BALANCE_SLOT_PREFIX.len()] != INJECTIVE_BALANCE_SLOT_PREFIX {
+        return None;
+    }
+
+    Some(Address::from_slice(
+        &bytes[INJECTIVE_BALANCE_SLOT_PREFIX.len()..],
+    ))
+}
+
+fn injective_total_supply_slot() -> U256 {
+    U256::from_be_slice(keccak256("edr.injective.bank.totalSupply").as_slice())
+}
+
+#[derive(Clone, Copy)]
+enum InjectiveSupplyChange {
+    Mint,
+    Burn,
+}
+
+impl InjectiveSupplyChange {
+    fn apply(self, value: U256, amount: U256) -> Option<U256> {
+        match self {
+            Self::Mint => value.checked_add(amount),
+            Self::Burn => value.checked_sub(amount),
+        }
+    }
+
+    fn readonly_error(self) -> &'static str {
+        match self {
+            Self::Mint => "Injective Bank: mint is not readonly",
+            Self::Burn => "Injective Bank: burn is not readonly",
+        }
+    }
+
+    fn balance_error(self) -> &'static str {
+        match self {
+            Self::Mint => "Injective Bank: balance overflow",
+            Self::Burn => "Injective Bank: insufficient funds",
+        }
+    }
+
+    fn supply_error(self) -> &'static str {
+        match self {
+            Self::Mint => "Injective Bank: supply overflow",
+            Self::Burn => "Injective Bank: insufficient supply",
+        }
+    }
+}
+
+fn run_injective_bank<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(
+            inputs,
+            "Injective Bank: missing selector",
+        ));
+    }
+
+    let selector = &calldata[..4];
+    let base_gas =
+        if selector == bankBalanceOfCall::SELECTOR || selector == bankTotalSupplyCall::SELECTOR {
+            INJECTIVE_BANK_READ_GAS
+        } else if selector == bankTransferCall::SELECTOR {
+            INJECTIVE_BANK_TRANSFER_GAS
+        } else if selector == bankMintCall::SELECTOR || selector == bankBurnCall::SELECTOR {
+            INJECTIVE_BANK_MINT_BURN_GAS
+        } else {
+            0
+        };
+    let Some(gas) = injective_bank_gas(inputs, calldata.len(), base_gas) else {
+        return Ok(injective_bank_out_of_gas(inputs));
+    };
+
+    if selector == bankBalanceOfCall::SELECTOR {
+        let Ok(call) = bankBalanceOfCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Injective Bank: invalid balanceOf calldata",
+            ));
+        };
+
+        let balance = read_word_at(context, call.token, injective_balance_slot(call.account))?;
+        return Ok(success_with_gas(gas, balance.abi_encode()));
+    }
+
+    if selector == bankTotalSupplyCall::SELECTOR {
+        let Ok(call) = bankTotalSupplyCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Injective Bank: invalid totalSupply calldata",
+            ));
+        };
+
+        let total_supply = read_word_at(context, call.token, injective_total_supply_slot())?;
+        return Ok(success_with_gas(gas, total_supply.abi_encode()));
+    }
+
+    if selector == bankTransferCall::SELECTOR {
+        if inputs.is_static {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Injective Bank: transfer is not readonly",
+            ));
+        }
+
+        let Ok(call) = bankTransferCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Injective Bank: invalid transfer calldata",
+            ));
+        };
+
+        let token = inputs.caller;
+        let sender_slot = injective_balance_slot(call.sender);
+        let sender_balance = read_word_at(context, token, sender_slot)?;
+        let Some(sender_balance) = sender_balance.checked_sub(call.amount) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Injective Bank: insufficient funds",
+            ));
+        };
+
+        if call.sender != call.recipient {
+            let recipient_slot = injective_balance_slot(call.recipient);
+            let recipient_balance = read_word_at(context, token, recipient_slot)?;
+            let Some(recipient_balance) = recipient_balance.checked_add(call.amount) else {
+                return Ok(revert_with_message_and_gas(
+                    gas,
+                    "Injective Bank: balance overflow",
+                ));
+            };
+
+            write_word_at(context, token, sender_slot, sender_balance)?;
+            write_word_at(context, token, recipient_slot, recipient_balance)?;
+        }
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    let supply_change = if selector == bankMintCall::SELECTOR {
+        Some(InjectiveSupplyChange::Mint)
+    } else if selector == bankBurnCall::SELECTOR {
+        Some(InjectiveSupplyChange::Burn)
+    } else {
+        None
+    };
+    if let Some(supply_change) = supply_change {
+        if inputs.is_static {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                supply_change.readonly_error(),
+            ));
+        }
+
+        let (actor, amount) = match supply_change {
+            InjectiveSupplyChange::Mint => {
+                let Ok(call) = bankMintCall::abi_decode(calldata) else {
+                    return Ok(revert_with_message_and_gas(
+                        gas,
+                        "Injective Bank: invalid mint calldata",
+                    ));
+                };
+                (call.actor, call.amount)
+            }
+            InjectiveSupplyChange::Burn => {
+                let Ok(call) = bankBurnCall::abi_decode(calldata) else {
+                    return Ok(revert_with_message_and_gas(
+                        gas,
+                        "Injective Bank: invalid burn calldata",
+                    ));
+                };
+                (call.actor, call.amount)
+            }
+        };
+
+        let token = inputs.caller;
+        let actor_slot = injective_balance_slot(actor);
+        let actor_balance = read_word_at(context, token, actor_slot)?;
+        let total_supply_slot = injective_total_supply_slot();
+        let total_supply = read_word_at(context, token, total_supply_slot)?;
+        let Some(actor_balance) = supply_change.apply(actor_balance, amount) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                supply_change.balance_error(),
+            ));
+        };
+        let Some(total_supply) = supply_change.apply(total_supply, amount) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                supply_change.supply_error(),
+            ));
+        };
+
+        write_word_at(context, token, actor_slot, actor_balance)?;
+        write_word_at(context, token, total_supply_slot, total_supply)?;
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    Ok(revert_with_message_and_gas(
+        gas,
+        &format!(
+            "Injective Bank: unsupported selector 0x{}",
+            alloy_primitives::hex::encode(selector)
+        ),
+    ))
+}
+
+fn injective_bank_gas(inputs: &CallInputs, calldata_len: usize, base_gas: u64) -> Option<Gas> {
+    let calldata_gas = u64::try_from(calldata_len)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(INJECTIVE_WRITE_COST_PER_BYTE);
+    let required_gas = base_gas.saturating_add(calldata_gas);
+    let mut gas = Gas::new(inputs.gas_limit);
+    gas.record_regular_cost(required_gas).then_some(gas)
+}
+
+fn injective_bank_out_of_gas(inputs: &CallInputs) -> InterpreterResult {
+    let mut gas = Gas::new(inputs.gas_limit);
+    gas.spend_all();
+    InterpreterResult {
+        result: InstructionResult::PrecompileOOG,
+        gas,
+        output: Bytes::new(),
+    }
+}
 
 /// Arbitrum precompile provider.
 ///
@@ -1197,9 +1550,13 @@ where
 }
 
 fn success(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
+    success_with_gas(Gas::new(inputs.gas_limit), output)
+}
+
+fn success_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
     InterpreterResult {
         result: InstructionResult::Return,
-        gas: Gas::new(inputs.gas_limit),
+        gas,
         output: output.into(),
     }
 }
@@ -1208,10 +1565,75 @@ fn revert_with_message(inputs: &CallInputs, message: &str) -> InterpreterResult 
     revert(inputs, Revert::from(message).abi_encode())
 }
 
+fn revert_with_message_and_gas(gas: Gas, message: &str) -> InterpreterResult {
+    revert_with_gas(gas, Revert::from(message).abi_encode())
+}
+
 fn revert(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
+    revert_with_gas(Gas::new(inputs.gas_limit), output)
+}
+
+fn revert_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
     InterpreterResult {
         result: InstructionResult::Revert,
-        gas: Gas::new(inputs.gas_limit),
+        gas,
         output: output.into(),
+    }
+}
+
+#[cfg(test)]
+mod injective_tests {
+    use alloy_sol_types::{SolCall as _, SolValue as _};
+    use edr_primitives::{address, U256};
+
+    use super::{
+        bankBalanceOfCall, bankBurnCall, bankMintCall, bankTotalSupplyCall,
+        injective_balance_account, injective_balance_slot, injective_remote_storage_call,
+        injective_total_supply_slot, INJECTIVE_BANK_ADDRESS,
+    };
+
+    #[test]
+    fn balance_slots_round_trip_accounts() {
+        let account = address!("1234567890123456789012345678901234567890");
+        let slot = injective_balance_slot(account);
+
+        assert_eq!(injective_balance_account(slot), Some(account));
+        assert_eq!(injective_balance_account(U256::ZERO), None);
+    }
+
+    #[test]
+    fn balance_storage_resolves_to_canonical_bank_call() {
+        let token = address!("1111111111111111111111111111111111111111");
+        let account = address!("2222222222222222222222222222222222222222");
+        let call = injective_remote_storage_call(token, injective_balance_slot(account))
+            .expect("balance slots must resolve");
+
+        assert_eq!(call.to, INJECTIVE_BANK_ADDRESS);
+        let decoded = bankBalanceOfCall::abi_decode(&call.data).unwrap();
+        assert_eq!(decoded.token, token);
+        assert_eq!(decoded.account, account);
+    }
+
+    #[test]
+    fn supply_storage_resolves_to_canonical_bank_call() {
+        let token = address!("1111111111111111111111111111111111111111");
+        let call = injective_remote_storage_call(token, injective_total_supply_slot())
+            .expect("supply slot must resolve");
+
+        assert_eq!(call.to, INJECTIVE_BANK_ADDRESS);
+        let decoded = bankTotalSupplyCall::abi_decode(&call.data).unwrap();
+        assert_eq!(decoded.token, token);
+        assert!(injective_remote_storage_call(token, U256::ZERO).is_none());
+    }
+
+    #[test]
+    fn bank_uint_return_is_a_single_word() {
+        assert_eq!(U256::from(42).abi_encode().len(), 32);
+    }
+
+    #[test]
+    fn mint_and_burn_use_canonical_selectors() {
+        assert_eq!(bankMintCall::SELECTOR, [0x40, 0xc1, 0x0f, 0x19]);
+        assert_eq!(bankBurnCall::SELECTOR, [0x9d, 0xc2, 0x9f, 0xac]);
     }
 }

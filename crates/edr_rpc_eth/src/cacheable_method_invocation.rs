@@ -225,7 +225,9 @@ impl<'a> TryFrom<&'a RequestMethod> for CachedRequestMethod<'a> {
             // Explicit to make sure if a new method is added, it is not forgotten here.
             // Chain id is not cacheable since a remote might change its chain id e.g. if it's a
             // forked node running on localhost.
-            RequestMethod::BlockNumber(_) | RequestMethod::ChainId(_) => {
+            RequestMethod::BlockNumber(_)
+            | RequestMethod::Call(_, _)
+            | RequestMethod::ChainId(_) => {
                 Err(MethodNotCacheableError::RequestMethod(value.clone()))
             }
         }
@@ -264,6 +266,7 @@ impl RpcMethod for RequestMethod {
 
     fn name(&self) -> &'static str {
         match self {
+            Self::Call(_, _) => "eth_call",
             Self::BlockNumber(_) => "eth_blockNumber",
             Self::FeeHistory(_, _, _) => "eth_feeHistory",
             Self::ChainId(_) => "eth_chainId",

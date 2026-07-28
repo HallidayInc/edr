@@ -16,6 +16,18 @@ use tokio::runtime;
 
 pub use self::cached::CachedRemoteState;
 
+/// A remote call that supplies the initial value of a virtual storage slot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteStorageCall {
+    /// Address to call.
+    pub to: Address,
+    /// Calldata for the call.
+    pub data: edr_primitives::Bytes,
+}
+
+/// Maps a virtual storage slot to a remote call at the fork block.
+pub type RemoteStorageResolver = fn(Address, U256) -> Option<RemoteStorageCall>;
+
 /// A state backed by a remote Ethereum node
 #[derive_where(Debug)]
 pub struct RemoteState<
@@ -26,6 +38,7 @@ pub struct RemoteState<
     client: Arc<EthRpcClient<RpcBlockChainSpecT, RpcReceiptT, RpcTransactionT>>,
     runtime: runtime::Handle,
     block_number: u64,
+    storage_resolver: Option<RemoteStorageResolver>,
 }
 
 impl<
@@ -41,10 +54,21 @@ impl<
         client: Arc<EthRpcClient<RpcBlockT, RpcReceiptT, RpcTransactionT>>,
         block_number: u64,
     ) -> Self {
+        Self::new_with_storage_resolver(runtime, client, block_number, None)
+    }
+
+    /// Construct a new instance with a virtual storage resolver.
+    pub fn new_with_storage_resolver(
+        runtime: runtime::Handle,
+        client: Arc<EthRpcClient<RpcBlockT, RpcReceiptT, RpcTransactionT>>,
+        block_number: u64,
+        storage_resolver: Option<RemoteStorageResolver>,
+    ) -> Self {
         Self {
             client,
             runtime,
             block_number,
+            storage_resolver,
         }
     }
 
@@ -126,6 +150,33 @@ impl<
 
     #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        if let Some(call) = self
+            .storage_resolver
+            .and_then(|resolver| resolver(address, index))
+        {
+            let output = tokio::task::block_in_place(move || {
+                self.runtime
+                    .block_on(self.client.call(
+                        call.to,
+                        call.data,
+                        BlockSpec::Number(self.block_number),
+                    ))
+                    .map_err(StateError::Remote)
+            })?;
+
+            if output.len() != 32 {
+                return Err(StateError::Unsupported {
+                    action: "resolving virtual fork storage".to_string(),
+                    details: Some(format!(
+                        "expected a 32-byte return value, received {} bytes",
+                        output.len()
+                    )),
+                });
+            }
+
+            return Ok(U256::from_be_slice(&output));
+        }
+
         Ok(tokio::task::block_in_place(move || {
             self.runtime
                 .block_on(self.client.get_storage_at(

@@ -1,13 +1,25 @@
 use edr_eth::{
     filter::LogFilterOptions, reward_percentile::RewardPercentile, BlockSpec, PreEip1898BlockSpec,
 };
-use edr_primitives::{Address, B256, U256};
+use edr_primitives::{Address, Bytes, B256, U256};
+
+/// Minimal request object for `eth_call`.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CallRequest {
+    /// Address to call.
+    pub to: Address,
+    /// Calldata for the call.
+    pub data: Bytes,
+}
 
 /// Methods for requests to a remote Ethereum node. Only contains methods
 /// supported by the [`edr_rpc_client::RpcClient`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(tag = "method", content = "params")]
 pub enum RequestMethod {
+    /// `eth_call`
+    #[serde(rename = "eth_call")]
+    Call(CallRequest, BlockSpec),
     /// `eth_blockNumber`
     #[serde(rename = "eth_blockNumber", with = "edr_eth::serde::empty_params")]
     BlockNumber(()),
