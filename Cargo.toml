@@ -266,15 +266,15 @@ revm-inspectors = { version = "0.41.1", features = ["serde"] }
 foundry-fork-db = "0.27"
 
 ## Tempo
-tempo-hardfork = { git = "https://github.com/tempoxyz/tempo", rev = "b314d4822ed6d7abdfb60cbde25ebad1ae6a98ec", default-features = false, features = [
+tempo-hardfork = { git = "https://github.com/tempoxyz/tempo", rev = "5ec0336812e683efa511a9e41cdd43b7e73a5eaa", default-features = false, features = [
     "serde",
     "std",
 ] }
-tempo-primitives = { git = "https://github.com/tempoxyz/tempo", rev = "b314d4822ed6d7abdfb60cbde25ebad1ae6a98ec", default-features = false, features = [
+tempo-primitives = { git = "https://github.com/tempoxyz/tempo", rev = "5ec0336812e683efa511a9e41cdd43b7e73a5eaa", default-features = false, features = [
     "serde",
 ] }
-tempo-alloy = { git = "https://github.com/tempoxyz/tempo", rev = "b314d4822ed6d7abdfb60cbde25ebad1ae6a98ec", default-features = false }
-tempo-revm = { git = "https://github.com/tempoxyz/tempo", rev = "b314d4822ed6d7abdfb60cbde25ebad1ae6a98ec", default-features = false, features = [
+tempo-alloy = { git = "https://github.com/tempoxyz/tempo", rev = "5ec0336812e683efa511a9e41cdd43b7e73a5eaa", default-features = false }
+tempo-revm = { git = "https://github.com/tempoxyz/tempo", rev = "5ec0336812e683efa511a9e41cdd43b7e73a5eaa", default-features = false, features = [
     "serde",
 ] }
 
