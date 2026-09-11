@@ -15,6 +15,7 @@ const dylib = Deno.dlopen(resolveLib(), {
     provider_handle_request: {
         parameters: ["u32", "pointer", "usize"],
         result: "pointer",
+        nonblocking: true,
     },
     provider_set_verbose_tracing: { parameters: ["u32", "u8"], result: "void" },
     provider_drop: { parameters: ["u32"], result: "void" },
@@ -41,7 +42,7 @@ type LoggerEntry = {
 
 const loggerMap = new Map<number, LoggerEntry>();
 
-const globalLogCb = new Deno.UnsafeCallback({
+const globalLogCb = Deno.UnsafeCallback.threadSafe({
     parameters: ["u32", "pointer", "usize", "u8"] as const,
     result: "void" as const,
 }, (id: number, ptr: Deno.PointerValue, len: bigint, replace: number) => {
@@ -53,7 +54,7 @@ const globalLogCb = new Deno.UnsafeCallback({
     entry.printLineCallback(msg, !!replace);
 }) as unknown as Deno.UnsafeCallback;
 
-const globalDecodeCb = new Deno.UnsafeCallback({
+const globalDecodeCb = Deno.UnsafeCallback.threadSafe({
     parameters: ["u32", "pointer", "usize"] as const,
     result: "void" as const,
 }, (id: number, ptr: Deno.PointerValue, len: bigint) => {
@@ -74,6 +75,9 @@ const globalDecodeCb = new Deno.UnsafeCallback({
     }
     entry.decodeConsoleLogInputsCallback(inputs);
 }) as unknown as Deno.UnsafeCallback;
+
+globalLogCb.unref();
+globalDecodeCb.unref();
 
 function stringify(value: unknown): string {
     return JSON.stringify(value, (_k, v) => {
@@ -124,7 +128,7 @@ export async function provider_handle_request(
 ): Promise<string> {
     const data = encode(req);
     const ptrIn = Deno.UnsafePointer.of(data);
-    const ptr = dylib.symbols.provider_handle_request(
+    const ptr = await dylib.symbols.provider_handle_request(
         id,
         ptrIn,
         BigInt(data.length),
@@ -189,29 +193,41 @@ export class Context {
 
 export class Provider {
     #id: number;
+    #queue: Promise<unknown> = Promise.resolve();
+    #closing: Promise<void> | undefined;
 
     constructor(id: number) {
         this.#id = id;
     }
 
-    async handleRequest(req: string) {
-        return { data: await provider_handle_request(this.#id, req) };
+    handleRequest(req: string): Promise<{ data: string }> {
+        if (this.#closing) {
+            return Promise.reject(new Error(`provider ${this.#id} is closed`));
+        }
+        const next = this.#queue.then(() =>
+            provider_handle_request(this.#id, req)
+        );
+        this.#queue = next.catch(() => {});
+        return next.then((data) => ({ data }));
     }
 
     setVerboseTracing(enabled: boolean) {
         provider_set_verbose_tracing(this.#id, enabled ? 1 : 0);
     }
 
-    close() {
-        provider_drop(this.#id);
-        loggerMap.delete(this.#id);
+    close(): Promise<void> {
+        this.#closing ??= this.#queue.then(() => {
+            provider_drop(this.#id);
+            loggerMap.delete(this.#id);
+        });
+        return this.#closing;
     }
 
     [Symbol.dispose]() {
-        this.close();
+        void this.close().catch(() => {});
     }
 
     async [Symbol.asyncDispose]() {
-        this.close();
+        await this.close();
     }
 }
