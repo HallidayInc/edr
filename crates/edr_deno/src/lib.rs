@@ -931,8 +931,29 @@ impl Clone for ProviderEntry {
     }
 }
 
+
+struct ProviderSlot {
+    entry: ProviderEntry,
+    in_flight: u32,
+    closing: bool,
+}
+
+struct InFlightGuard(u32);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        let mut map = PROVIDERS.lock().unwrap();
+        if let Some(slot) = map.get_mut(&self.0) {
+            slot.in_flight = slot.in_flight.saturating_sub(1);
+            if slot.closing && slot.in_flight == 0 {
+                map.remove(&self.0);
+            }
+        }
+    }
+}
+
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
-static PROVIDERS: Lazy<Mutex<HashMap<u32, ProviderEntry>>> =
+static PROVIDERS: Lazy<Mutex<HashMap<u32, ProviderSlot>>> =
     Lazy::new(|| Mutex::new(HashMap::default()));
 static NEXT_CTX_ID: AtomicU32 = AtomicU32::new(1);
 static CONTEXTS: Lazy<Mutex<HashSet<u32>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -1720,17 +1741,35 @@ pub fn provider_new(
         }
     };
 
-    PROVIDERS.lock().unwrap().insert(id, entry);
+    PROVIDERS.lock().unwrap().insert(
+        id,
+        ProviderSlot {
+            entry,
+            in_flight: 0,
+            closing: false,
+        },
+    );
     id
 }
 
 /// Handles a JSON-RPC request and returns the JSON-RPC response string.
 #[deno_bindgen(non_blocking)]
 pub fn provider_handle_request(id: u32, request: &str) -> String {
-    let entry = {
-        let map = PROVIDERS.lock().unwrap();
-        match map.get(&id) {
-            Some(p) => p.clone(),
+    let (entry, _guard) = {
+        let mut map = PROVIDERS.lock().unwrap();
+        match map.get_mut(&id) {
+            Some(slot) if !slot.closing => {
+                slot.in_flight += 1;
+                (slot.entry.clone(), InFlightGuard(id))
+            }
+            Some(_) => {
+                let err = jsonrpc::ResponseData::<()>::new_error(
+                    -32000,
+                    "provider is closing",
+                    None::<serde_json::Value>,
+                );
+                return serde_json::to_string(&err).unwrap();
+            }
             None => {
                 let err = jsonrpc::ResponseData::<()>::new_error(
                     -32000,
@@ -1966,8 +2005,8 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
 /// Enables or disables verbose tracing on the provider.
 #[deno_bindgen]
 pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
-    if let Some(entry) = PROVIDERS.lock().unwrap().get(&id) {
-        match entry {
+    if let Some(slot) = PROVIDERS.lock().unwrap().get(&id) {
+        match &slot.entry {
             ProviderEntry::L1(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Op(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
@@ -1979,8 +2018,14 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
     }
 }
 
-/// Drops a provider created with [`provider_new`].
+/// Closes a provider created with [`provider_new`].
 #[deno_bindgen]
 pub fn provider_drop(id: u32) {
-    PROVIDERS.lock().unwrap().remove(&id);
+    let mut map = PROVIDERS.lock().unwrap();
+    if let Some(slot) = map.get_mut(&id) {
+        slot.closing = true;
+        if slot.in_flight == 0 {
+            map.remove(&id);
+        }
+    }
 }

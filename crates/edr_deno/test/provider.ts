@@ -1391,3 +1391,59 @@ Deno.test("transaction logging details", async () => {
     assert(logs.some((l) => l.includes("From")));
     assert(logs.some((l) => l.includes("To")));
 });
+
+Deno.test("close completes requests that were already accepted", async () => {
+    using ctx = new Context();
+    const provider = ctx.createProvider({ chain: "l1" });
+
+    const pending = provider.handleRequest(
+        JSON.stringify({ id: 1, jsonrpc: "2.0", method: "eth_chainId", params: [] }),
+    );
+    const closed = provider.close();
+
+    const res = JSON.parse((await pending).data);
+    assertEquals(res.error, undefined);
+    assert(res.result !== undefined);
+    await closed;
+});
+
+Deno.test("requests after close are rejected", async () => {
+    using ctx = new Context();
+    const provider = ctx.createProvider({ chain: "l1" });
+
+    await request(provider, { method: "eth_blockNumber", params: [] });
+    await provider.close();
+
+    await assertRejects(() =>
+        request(provider, { method: "eth_blockNumber", params: [] })
+    );
+});
+
+Deno.test("close is idempotent", async () => {
+    using ctx = new Context();
+    const provider = ctx.createProvider({ chain: "l1" });
+
+    await request(provider, { method: "eth_blockNumber", params: [] });
+    const first = provider.close();
+    assertEquals(provider.close(), first);
+    await first;
+});
+
+Deno.test("requests do not block the event loop", async () => {
+    using ctx = new Context();
+    using provider = ctx.createProvider({ chain: "l1" });
+
+    let fired = false;
+    const timer = setTimeout(() => {
+        fired = true;
+    }, 0);
+    try {
+        for (let i = 0; i < 200; i++) {
+            await request(provider, { method: "eth_blockNumber", params: [] });
+        }
+    } finally {
+        clearTimeout(timer);
+    }
+
+    assert(fired, "event loop was starved across 200 requests");
+});
