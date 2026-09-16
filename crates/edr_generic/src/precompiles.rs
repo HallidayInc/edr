@@ -6,7 +6,7 @@ use edr_chain_spec_evm::{
 use edr_primitives::{address, keccak256, Address, Bytes, B256, U256};
 use edr_state_remote::RemoteStorageCall;
 use revm_context_interface::{journaled_state::account::JournaledAccountTr, Cfg, Transaction as _};
-use revm_handler::PrecompileProvider;
+use revm_handler::{PrecompileProvider, SYSTEM_ADDRESS};
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
 use revm_primitives::AddressSet;
 
@@ -21,6 +21,15 @@ const INJECTIVE_BANK_READ_GAS: u64 = 10_000;
 const INJECTIVE_BANK_TRANSFER_GAS: u64 = 150_000;
 const INJECTIVE_BANK_MINT_BURN_GAS: u64 = 200_000;
 const INJECTIVE_WRITE_COST_PER_BYTE: u64 = 30;
+const ARC_NATIVE_COIN_AUTHORITY_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000000");
+const ARC_NATIVE_COIN_CONTROL_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000001");
+const ARC_NATIVE_FIAT_TOKEN_ADDRESS: Address = address!("3600000000000000000000000000000000000000");
+const ARC_TOTAL_SUPPLY_SLOT: u64 = 2;
+const ARC_READ_GAS: u64 = 2_100;
+const ARC_TRANSFER_GAS: u64 = 20_000;
+const ARC_MINT_BURN_GAS: u64 = 30_000;
 const ARBINFO_ADDRESS: Address = address!("0000000000000000000000000000000000000065");
 const ARBOWNERPUBLIC_ADDRESS: Address = address!("000000000000000000000000000000000000006b");
 const ARBSYS_STATE_ADDRESS: Address = address!("00000000000000000000000000000000A4B05A11");
@@ -35,6 +44,18 @@ sol! {
         function transfer(address sender, address recipient, uint256 amount) external payable returns (bool);
         function mint(address actor, uint256 amount) external payable returns (bool);
         function burn(address actor, uint256 amount) external payable returns (bool);
+    }
+
+    interface ArcNativeCoinAuthority {
+        function mint(address to, uint256 amount) external returns (bool);
+        function burn(address from, uint256 amount) external returns (bool);
+        function transfer(address from, address to, uint256 amount) external returns (bool);
+        function totalSupply() external view returns (uint256 supply);
+        event Transfer(address indexed from, address indexed to, uint256 value);
+    }
+
+    interface ArcNativeCoinControl {
+        function isBlocklisted(address account) external view returns (bool _isBlocklisted);
     }
 
     interface ArbInfo {
@@ -133,6 +154,11 @@ use self::{
         sendTxToL1Call, wasMyCallersAddressAliasedCall, withdrawEthCall, InvalidBlockNumber,
         L2ToL1Tx, SendMerkleUpdate,
     },
+    ArcNativeCoinAuthority::{
+        burnCall as arcBurnCall, mintCall as arcMintCall, totalSupplyCall as arcTotalSupplyCall,
+        transferCall as arcTransferCall, Transfer as ArcTransfer,
+    },
+    ArcNativeCoinControl::isBlocklistedCall as arcIsBlocklistedCall,
     InjectiveBank::{
         balanceOfCall as bankBalanceOfCall, burnCall as bankBurnCall, mintCall as bankMintCall,
         totalSupplyCall as bankTotalSupplyCall, transferCall as bankTransferCall,
@@ -209,6 +235,406 @@ where
     fn contains(&self, address: &Address) -> bool {
         *address == INJECTIVE_BANK_ADDRESS || self.inner.contains(address)
     }
+}
+
+/// Arc precompile provider.
+///
+/// This keeps Ethereum's built-in precompiles and adds Circle Arc's system
+/// precompiles: the Native Coin Authority (`0x1800…0000`), which the native USDC
+/// ERC-20 interface at `0x3600…0000` uses to mint, burn and move native
+/// balances, and the Native Coin Control blocklist (`0x1800…0001`).
+#[derive(Debug, Clone)]
+pub struct ArcPrecompiles {
+    inner: EthPrecompiles,
+    warm_addresses: AddressSet,
+}
+
+impl ArcPrecompiles {
+    pub fn new(spec: edr_chain_spec::EvmSpecId) -> Self {
+        let inner = EthPrecompiles::new(spec);
+        let warm_addresses = Self::warm_addresses_for(&inner);
+        Self {
+            inner,
+            warm_addresses,
+        }
+    }
+
+    fn warm_addresses_for(inner: &EthPrecompiles) -> AddressSet {
+        inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([
+                ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+            ])
+            .collect()
+    }
+}
+
+impl<ContextT> PrecompileProvider<ContextT> for ArcPrecompiles
+where
+    ContextT: ContextTrait,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
+        let changed =
+            <EthPrecompiles as PrecompileProvider<ContextT>>::set_spec(&mut self.inner, spec);
+        if changed {
+            self.warm_addresses = Self::warm_addresses_for(&self.inner);
+        }
+        changed
+    }
+
+    fn run(
+        &mut self,
+        context: &mut ContextT,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        if inputs.bytecode_address == ARC_NATIVE_COIN_AUTHORITY_ADDRESS {
+            return run_arc_native_coin_authority(context, inputs).map(Some);
+        }
+        if inputs.bytecode_address == ARC_NATIVE_COIN_CONTROL_ADDRESS {
+            return run_arc_native_coin_control(context, inputs).map(Some);
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.warm_addresses
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        *address == ARC_NATIVE_COIN_AUTHORITY_ADDRESS
+            || *address == ARC_NATIVE_COIN_CONTROL_ADDRESS
+            || self.inner.contains(address)
+    }
+}
+
+fn arc_gas(inputs: &CallInputs, required_gas: u64) -> Option<Gas> {
+    let mut gas = Gas::new(inputs.gas_limit);
+    gas.record_regular_cost(required_gas).then_some(gas)
+}
+
+fn arc_out_of_gas(inputs: &CallInputs) -> InterpreterResult {
+    let mut gas = Gas::new(inputs.gas_limit);
+    gas.spend_all();
+    InterpreterResult {
+        result: InstructionResult::PrecompileOOG,
+        gas,
+        output: Bytes::new(),
+    }
+}
+
+fn arc_total_supply_slot() -> U256 {
+    U256::from(ARC_TOTAL_SUPPLY_SLOT)
+}
+
+fn arc_emit_transfer<ContextT>(context: &mut ContextT, from: Address, to: Address, value: U256)
+where
+    ContextT: ContextTrait,
+{
+    context.journal_mut().log(Log {
+        address: SYSTEM_ADDRESS,
+        data: ArcTransfer { from, to, value }.encode_log_data(),
+    });
+}
+
+fn run_arc_native_coin_control<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(
+            inputs,
+            "Native Coin Control: missing selector",
+        ));
+    }
+
+    let Some(gas) = arc_gas(inputs, ARC_READ_GAS) else {
+        return Ok(arc_out_of_gas(inputs));
+    };
+
+    let selector = &calldata[..4];
+    if selector == arcIsBlocklistedCall::SELECTOR {
+        let Ok(_call) = arcIsBlocklistedCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Control: invalid isBlocklisted calldata",
+            ));
+        };
+
+        // Forks never blocklist anyone; the real precompile reads a per-address flag.
+        return Ok(success_with_gas(gas, false.abi_encode()));
+    }
+
+    Ok(revert_with_message_and_gas(
+        gas,
+        &format!(
+            "Native Coin Control: unsupported selector 0x{}",
+            alloy_primitives::hex::encode(selector)
+        ),
+    ))
+}
+
+fn run_arc_native_coin_authority<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(revert_with_message(
+            inputs,
+            "Native Coin Authority: missing selector",
+        ));
+    }
+
+    let selector = &calldata[..4];
+    let required_gas = if selector == arcTotalSupplyCall::SELECTOR {
+        ARC_READ_GAS
+    } else if selector == arcTransferCall::SELECTOR {
+        ARC_TRANSFER_GAS
+    } else if selector == arcMintCall::SELECTOR || selector == arcBurnCall::SELECTOR {
+        ARC_MINT_BURN_GAS
+    } else {
+        0
+    };
+    let Some(gas) = arc_gas(inputs, required_gas) else {
+        return Ok(arc_out_of_gas(inputs));
+    };
+
+    arc_keep_alive(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS)?;
+
+    if selector == arcTotalSupplyCall::SELECTOR {
+        let Ok(_call) = arcTotalSupplyCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: invalid totalSupply calldata",
+            ));
+        };
+
+        let total_supply = read_word_at(
+            context,
+            ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+            arc_total_supply_slot(),
+        )?;
+        return Ok(success_with_gas(gas, total_supply.abi_encode()));
+    }
+
+    let is_mutator = selector == arcTransferCall::SELECTOR
+        || selector == arcMintCall::SELECTOR
+        || selector == arcBurnCall::SELECTOR;
+    if is_mutator {
+        if inputs.is_static {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: state change during static call",
+            ));
+        }
+        if inputs.caller != ARC_NATIVE_FIAT_TOKEN_ADDRESS {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: invalid caller",
+            ));
+        }
+    }
+
+    if selector == arcTransferCall::SELECTOR {
+        let Ok(call) = arcTransferCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: invalid transfer calldata",
+            ));
+        };
+        if call.from == Address::ZERO || call.to == Address::ZERO {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+
+        if call.amount != U256::ZERO {
+            if !arc_decr_balance(context, call.from, call.amount)? {
+                return Ok(revert_with_message_and_gas(
+                    gas,
+                    "Native Coin Authority: insufficient funds",
+                ));
+            }
+            if !arc_incr_balance(context, call.to, call.amount)? {
+                return Ok(revert_with_message_and_gas(
+                    gas,
+                    "Native Coin Authority: balance overflow",
+                ));
+            }
+            if call.from != call.to {
+                arc_emit_transfer(context, call.from, call.to, call.amount);
+            }
+        }
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    if selector == arcMintCall::SELECTOR {
+        let Ok(call) = arcMintCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: invalid mint calldata",
+            ));
+        };
+        if call.to == Address::ZERO {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+        if call.amount == U256::ZERO {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: zero amount invalid",
+            ));
+        }
+
+        let slot = arc_total_supply_slot();
+        let total_supply = read_word_at(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS, slot)?;
+        let Some(total_supply) = total_supply.checked_add(call.amount) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: arithmetic overflow",
+            ));
+        };
+        write_word_at(
+            context,
+            ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+            slot,
+            total_supply,
+        )?;
+        if !arc_incr_balance(context, call.to, call.amount)? {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: balance overflow",
+            ));
+        }
+        arc_emit_transfer(context, Address::ZERO, call.to, call.amount);
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    if selector == arcBurnCall::SELECTOR {
+        let Ok(call) = arcBurnCall::abi_decode(calldata) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: invalid burn calldata",
+            ));
+        };
+        if call.from == Address::ZERO {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+        if call.amount == U256::ZERO {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: zero amount invalid",
+            ));
+        }
+
+        let slot = arc_total_supply_slot();
+        let total_supply = read_word_at(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS, slot)?;
+        let Some(total_supply) = total_supply.checked_sub(call.amount) else {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: arithmetic overflow",
+            ));
+        };
+        if !arc_decr_balance(context, call.from, call.amount)? {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: insufficient funds",
+            ));
+        }
+        write_word_at(
+            context,
+            ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+            slot,
+            total_supply,
+        )?;
+        arc_emit_transfer(context, call.from, Address::ZERO, call.amount);
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    Ok(revert_with_message_and_gas(
+        gas,
+        &format!(
+            "Native Coin Authority: unsupported selector 0x{}",
+            alloy_primitives::hex::encode(selector)
+        ),
+    ))
+}
+
+// The authority holds the total supply in its own storage but has no code, nonce or
+// balance, so EIP-161 clearing would wipe that storage after any call that touches it.
+fn arc_keep_alive<ContextT>(context: &mut ContextT, address: Address) -> Result<(), String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| error.to_string())?;
+    if account.data.nonce() == 0 {
+        account.data.set_nonce(1);
+    }
+    Ok(())
+}
+
+fn arc_incr_balance<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    amount: U256,
+) -> Result<bool, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| error.to_string())?;
+    Ok(account.data.incr_balance(amount))
+}
+
+fn arc_decr_balance<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    amount: U256,
+) -> Result<bool, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| error.to_string())?;
+    Ok(account.data.decr_balance(amount))
 }
 
 pub(crate) fn injective_remote_storage_call(

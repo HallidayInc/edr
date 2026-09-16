@@ -1,3 +1,4 @@
+mod arc_local;
 mod helpers;
 mod injective;
 mod injective_local;
