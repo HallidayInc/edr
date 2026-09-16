@@ -22,8 +22,8 @@ use edr_chain_l1::{self as l1, L1ChainSpec};
 use edr_chain_spec::ExecutableTransaction;
 use edr_eip7825::transaction_gas_cap_for_hardfork;
 use edr_generic::{
-    ApeChainSpec, ArbChainSpec, GenericChainSpec, InjectiveChainSpec, TempoChainSpec,
-    TempoHardfork, APE_PRECOMPILE_STATE_ADDRESS,
+    ApeChainSpec, ArbChainSpec, ArcChainSpec, ArcHardfork, GenericChainSpec, InjectiveChainSpec,
+    TempoChainSpec, TempoHardfork, APE_PRECOMPILE_STATE_ADDRESS,
 };
 use edr_op::{self, OpChainSpec};
 use edr_primitives::{Address, Bytecode, Bytes, HashMap, U256, U64};
@@ -424,6 +424,10 @@ fn parse_tempo_hardfork(name: &str) -> Option<TempoHardfork> {
     }
 }
 
+fn parse_arc_hardfork(name: &str) -> Option<ArcHardfork> {
+    name.parse().ok()
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Chain {
@@ -431,6 +435,7 @@ enum Chain {
     Op,
     Generic,
     Injective,
+    Arc,
     Arb,
     Ape,
     Tempo,
@@ -531,6 +536,22 @@ fn configured_hardfork<HardforkT>(
         .and_then(|activation| parse_spec_id(&activation.spec_id))
 }
 
+fn configured_arc_hardfork(
+    hardfork: Option<&str>,
+    activations: Option<&HardforkActivations<ArcHardfork>>,
+    fork_block_number: Option<u64>,
+) -> Option<ArcHardfork> {
+    if let Some(hardfork) = hardfork.and_then(parse_arc_hardfork) {
+        return Some(hardfork.execution());
+    }
+
+    ArcChainSpec::resolve_hardfork(activations?, fork_block_number.unwrap_or(0), 0)
+}
+
+fn resolve_arc_hardfork_at_fork(hardfork: Option<&str>, fork: Option<&ForkConfig>) -> bool {
+    hardfork.is_none() && fork.is_some()
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct NativeTokenMirrorConfig {
@@ -584,6 +605,77 @@ fn chain_overrides<HardforkT: Clone>(
     chain_overrides
 }
 
+#[cfg(test)]
+mod tests {
+    use edr_chain_spec::EvmSpecId;
+    use edr_generic::ArcFeatures;
+
+    use super::*;
+
+    #[test]
+    fn arc_custom_history_uses_the_same_remote_and_successor_features() {
+        let chain_id = 9_999_999;
+        let chains = [ChainConfig {
+            chain_id,
+            hardforks: vec![HardforkActivationConfig {
+                block_number: 0,
+                spec_id: "zero4".to_owned(),
+            }],
+        }];
+        let overrides = chain_overrides(&chains, parse_arc_hardfork);
+        let activations = overrides[&chain_id]
+            .hardfork_activation_overrides
+            .as_ref()
+            .unwrap();
+        let remote = ArcChainSpec::resolve_hardfork(activations, 0, 0).unwrap();
+        let successor = configured_arc_hardfork(None, Some(activations), Some(0)).unwrap();
+        let expected = ArcHardfork::new(EvmSpecId::PRAGUE, ArcFeatures::ZERO4);
+
+        assert_eq!(remote, expected);
+        assert_eq!(successor, expected);
+        assert_ne!(successor, ArcHardfork::ZERO4);
+    }
+
+    #[test]
+    fn arc_custom_history_without_fork_block_uses_the_selected_remote_height() {
+        let chain_id = 9_999_999;
+        let chains = [ChainConfig {
+            chain_id,
+            hardforks: vec![
+                HardforkActivationConfig {
+                    block_number: 0,
+                    spec_id: "zero3".to_owned(),
+                },
+                HardforkActivationConfig {
+                    block_number: 10,
+                    spec_id: "zero4".to_owned(),
+                },
+            ],
+        }];
+        let overrides = chain_overrides(&chains, parse_arc_hardfork);
+        let fork = ForkConfig {
+            json_rpc_url: String::new(),
+            block_number: None,
+            http_headers: None,
+        };
+
+        assert!(resolve_arc_hardfork_at_fork(None, Some(&fork)));
+        assert!(!resolve_arc_hardfork_at_fork(Some("zero8"), Some(&fork)));
+
+        let activations = overrides[&chain_id]
+            .hardfork_activation_overrides
+            .as_ref()
+            .unwrap();
+        let selected = ArcChainSpec::resolve_hardfork(activations, 11, 0).unwrap();
+        let expected = ArcHardfork::new(
+            EvmSpecId::PRAGUE,
+            ArcFeatures::ZERO3.union(ArcFeatures::ZERO4),
+        );
+
+        assert_eq!(selected, expected);
+    }
+}
+
 fn insert_native_token_mirror_override<HardforkT>(
     chain_overrides: &mut HashMap<u64, ChainOverride<HardforkT>>,
     chain_id: u64,
@@ -631,6 +723,33 @@ fn apply_compatibility_hardfork<HardforkT>(
             native_token_mirror: None,
             hardfork_activation_overrides: Some(activations),
         });
+}
+
+fn apply_common_provider_options<HardforkT>(
+    cfg: &mut edr_provider::config::ProviderConfig<HardforkT>,
+    opts: &ProviderOptions,
+) {
+    if let Some(v) = opts.allow_unlimited_contract_size {
+        cfg.allow_unlimited_contract_size = v;
+    }
+    if let Some(v) = opts.allow_blocks_with_same_timestamp {
+        cfg.allow_blocks_with_same_timestamp = v;
+    }
+    if let Some(v) = opts.bail_on_call_failure {
+        cfg.bail_on_call_failure = v;
+    }
+    if let Some(v) = opts.bail_on_transaction_failure {
+        cfg.bail_on_transaction_failure = v;
+    }
+    if let Some(v) = opts.block_gas_limit {
+        if let Some(nz) = NonZeroU64::new(v) {
+            cfg.default_transaction_gas_limit = nz;
+            cfg.mining.block_gas_limit = Some(nz);
+        }
+    }
+    if let Some(v) = opts.min_gas_price {
+        cfg.min_gas_price = v;
+    }
 }
 
 fn apply_transaction_gas_cap<HardforkT>(
@@ -912,6 +1031,7 @@ enum ProviderEntry {
     Op(Arc<Provider<OpChainSpec>>),
     Generic(Arc<Provider<GenericChainSpec>>),
     Injective(Arc<Provider<InjectiveChainSpec>>),
+    Arc(Arc<Provider<ArcChainSpec>>),
     Arb(Arc<Provider<ArbChainSpec>>),
     Ape(Arc<Provider<ApeChainSpec>>),
     Tempo(Arc<Provider<TempoChainSpec>>),
@@ -924,13 +1044,13 @@ impl Clone for ProviderEntry {
             Self::Op(p) => Self::Op(Arc::clone(p)),
             Self::Generic(p) => Self::Generic(Arc::clone(p)),
             Self::Injective(p) => Self::Injective(Arc::clone(p)),
+            Self::Arc(p) => Self::Arc(Arc::clone(p)),
             Self::Arb(p) => Self::Arb(Arc::clone(p)),
             Self::Ape(p) => Self::Ape(Arc::clone(p)),
             Self::Tempo(p) => Self::Tempo(Arc::clone(p)),
         }
     }
 }
-
 
 struct ProviderSlot {
     entry: ProviderEntry,
@@ -1072,27 +1192,7 @@ pub fn provider_new(
             } else {
                 test_utils::create_test_config::<l1::Hardfork>()
             };
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1176,27 +1276,7 @@ pub fn provider_new(
             // partial support. Keep the Deno provider's default aligned with the
             // latest hardfork that EDR exposes as supported.
             cfg.hardfork = edr_op::Hardfork::ISTHMUS;
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1276,27 +1356,7 @@ pub fn provider_new(
             } else {
                 test_utils::create_test_config::<l1::Hardfork>()
             };
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1374,27 +1434,7 @@ pub fn provider_new(
             } else {
                 test_utils::create_test_config::<l1::Hardfork>()
             };
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1449,6 +1489,93 @@ pub fn provider_new(
                 Err(_) => return 0,
             }
         }
+        Chain::Arc => {
+            let arc_chain_overrides = opts
+                .chains
+                .as_deref()
+                .map(|chains| self::chain_overrides(chains, parse_arc_hardfork))
+                .unwrap_or_default();
+            let fork = fork_opts
+                .as_ref()
+                .map(|f| edr_provider::config::ForkConfig {
+                    block_number: f.block_number,
+                    cache_dir: opts
+                        .cache_dir
+                        .clone()
+                        .map(PathBuf::from)
+                        .unwrap_or_default(),
+                    chain_overrides: arc_chain_overrides.clone(),
+                    http_headers: f.http_headers.as_ref().map(|h| {
+                        h.iter()
+                            .map(|h| (h.name.clone(), h.value.clone()))
+                            .collect::<std::collections::HashMap<_, _>>()
+                    }),
+                    url: f.json_rpc_url.clone(),
+                });
+            let mut cfg = if fork.is_some() {
+                test_utils::create_test_config_with_fork::<ArcHardfork>(fork)
+            } else {
+                test_utils::create_test_config::<ArcHardfork>()
+            };
+            apply_common_provider_options(&mut cfg, &opts);
+            if let Some(id) = opts.chain_id {
+                cfg.chain_id = id;
+                if opts.network_id.is_none() {
+                    cfg.network_id = id;
+                }
+            } else {
+                cfg.chain_id = 5042;
+                if opts.network_id.is_none() {
+                    cfg.network_id = 5042;
+                }
+            }
+            if let Some(v) = opts.network_id {
+                cfg.network_id = v;
+            }
+            let arc_activations = arc_chain_overrides
+                .get(&cfg.chain_id)
+                .and_then(|chain| chain.hardfork_activation_overrides.as_ref());
+            cfg.resolve_hardfork_at_fork =
+                resolve_arc_hardfork_at_fork(opts.hardfork.as_deref(), fork_opts.as_ref());
+            if !cfg.resolve_hardfork_at_fork
+                && let Some(hardfork) = configured_arc_hardfork(
+                    opts.hardfork.as_deref(),
+                    arc_activations,
+                    fork_opts.as_ref().and_then(|fork| fork.block_number),
+                )
+            {
+                cfg.hardfork = hardfork;
+            }
+            let chain_id = cfg.chain_id;
+            cfg.chain_overrides.extend(arc_chain_overrides);
+            insert_native_token_mirror_override(
+                &mut cfg.chain_overrides,
+                chain_id,
+                opts.native_token_mirror.as_ref(),
+            );
+            apply_compatibility_hardfork(&mut cfg.chain_overrides, chain_id, cfg.hardfork);
+            if !cfg.resolve_hardfork_at_fork {
+                let transaction_gas_cap = transaction_gas_cap_for_hardfork(cfg.hardfork);
+                apply_transaction_gas_cap(&mut cfg, transaction_gas_cap);
+            }
+            if !owned_accounts.is_empty() {
+                cfg.owned_accounts = owned_accounts.clone();
+            }
+            if !genesis_state.is_empty() {
+                cfg.genesis_state.extend(genesis_state.clone());
+            }
+            match Provider::<ArcChainSpec>::new(
+                runtime.handle().clone(),
+                Box::new(FfiLogger::new(id, log_cb, decode_cb, log_enabled != 0)),
+                Box::new(|_event| {}),
+                cfg,
+                contract_decoder,
+                CurrentTime,
+            ) {
+                Ok(p) => ProviderEntry::Arc(Arc::new(p)),
+                Err(_) => return 0,
+            }
+        }
         Chain::Arb => {
             let fork = fork_opts.as_ref().map(|f| {
                 let mut chain_overrides: HashMap<u64, ChainOverride<l1::Hardfork>> =
@@ -1477,27 +1604,7 @@ pub fn provider_new(
             } else {
                 test_utils::create_test_config::<l1::Hardfork>()
             };
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1575,27 +1682,7 @@ pub fn provider_new(
             } else {
                 test_utils::create_test_config::<l1::Hardfork>()
             };
-            if let Some(v) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = v;
-            }
-            if let Some(v) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = v;
-            }
-            if let Some(v) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = v;
-            }
-            if let Some(v) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = v;
-            }
-            if let Some(v) = opts.block_gas_limit {
-                if let Some(nz) = NonZeroU64::new(v) {
-                    cfg.default_transaction_gas_limit = nz;
-                    cfg.mining.block_gas_limit = Some(nz);
-                }
-            }
-            if let Some(v) = opts.min_gas_price {
-                cfg.min_gas_price = v;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(id) = opts.chain_id {
                 cfg.chain_id = id;
                 if opts.network_id.is_none() {
@@ -1695,25 +1782,7 @@ pub fn provider_new(
             if !is_forked && cfg.hardfork.is_t7() {
                 cfg.initial_base_fee_per_gas = Some(TEMPO_T7_BASE_FEE_FLOOR.into());
             }
-            if let Some(value) = opts.allow_unlimited_contract_size {
-                cfg.allow_unlimited_contract_size = value;
-            }
-            if let Some(value) = opts.allow_blocks_with_same_timestamp {
-                cfg.allow_blocks_with_same_timestamp = value;
-            }
-            if let Some(value) = opts.bail_on_call_failure {
-                cfg.bail_on_call_failure = value;
-            }
-            if let Some(value) = opts.bail_on_transaction_failure {
-                cfg.bail_on_transaction_failure = value;
-            }
-            if let Some(value) = opts.block_gas_limit.and_then(NonZeroU64::new) {
-                cfg.default_transaction_gas_limit = value;
-                cfg.mining.block_gas_limit = Some(value);
-            }
-            if let Some(value) = opts.min_gas_price {
-                cfg.min_gas_price = value;
-            }
+            apply_common_provider_options(&mut cfg, &opts);
             if let Some(chains) = &opts.chains {
                 cfg.chain_overrides
                     .extend(self::chain_overrides(chains, parse_tempo_hardfork));
@@ -1781,224 +1850,49 @@ pub fn provider_handle_request(id: u32, request: &str) -> String {
         }
     };
 
+    macro_rules! handle_request {
+        ($provider:ident, $chain:ty) => {{
+            let req: edr_provider::requests::ProviderRequest<$chain> =
+                match serde_json::from_str(request) {
+                    Ok(r) => r,
+                    Err(error) => {
+                        let msg = error.to_string();
+                        let value = serde_json::Value::from_str(request).ok();
+                        let method = value
+                            .as_ref()
+                            .and_then(|v| v.get("method"))
+                            .and_then(serde_json::Value::as_str);
+                        let reason = InvalidRequestReason::new(method, &msg);
+                        if let Some((name, provider_error)) =
+                            reason.provider_error::<$chain, CurrentTime>()
+                        {
+                            let _ = $provider.log_failed_deserialization(name, &provider_error);
+                        }
+                        let err = jsonrpc::ResponseData::<()>::Error {
+                            error: jsonrpc::Error {
+                                code: reason.error_code(),
+                                message: reason.error_message(),
+                                data: value,
+                            },
+                        };
+                        return serde_json::to_string(&err).unwrap();
+                    }
+                };
+            let result = $provider.handle_request(req);
+            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
+            serde_json::to_string(&response).unwrap()
+        }};
+    }
+
     match entry {
-        ProviderEntry::L1(provider) => {
-            let req: edr_provider::requests::ProviderRequest<L1ChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<L1ChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Op(provider) => {
-            let req: edr_provider::requests::ProviderRequest<OpChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<OpChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Generic(provider) => {
-            let req: edr_provider::requests::ProviderRequest<GenericChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<GenericChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Injective(provider) => {
-            let req: edr_provider::requests::ProviderRequest<InjectiveChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<InjectiveChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Arb(provider) => {
-            let req: edr_provider::requests::ProviderRequest<ArbChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<ArbChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Ape(provider) => {
-            let req: edr_provider::requests::ProviderRequest<ApeChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(r) => r,
-                    Err(error) => {
-                        let msg = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|v| v.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &msg);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<ApeChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let err = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&err).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|r| r.result));
-            serde_json::to_string(&response).unwrap()
-        }
-        ProviderEntry::Tempo(provider) => {
-            let req: edr_provider::requests::ProviderRequest<TempoChainSpec> =
-                match serde_json::from_str(request) {
-                    Ok(request) => request,
-                    Err(error) => {
-                        let message = error.to_string();
-                        let value = serde_json::Value::from_str(request).ok();
-                        let method = value
-                            .as_ref()
-                            .and_then(|value| value.get("method"))
-                            .and_then(serde_json::Value::as_str);
-                        let reason = InvalidRequestReason::new(method, &message);
-                        if let Some((name, provider_error)) =
-                            reason.provider_error::<TempoChainSpec, CurrentTime>()
-                        {
-                            let _ = provider.log_failed_deserialization(name, &provider_error);
-                        }
-                        let response = jsonrpc::ResponseData::<()>::Error {
-                            error: jsonrpc::Error {
-                                code: reason.error_code(),
-                                message: reason.error_message(),
-                                data: value,
-                            },
-                        };
-                        return serde_json::to_string(&response).unwrap();
-                    }
-                };
-            let result = provider.handle_request(req);
-            let response = jsonrpc::ResponseData::from(result.map(|response| response.result));
-            serde_json::to_string(&response).unwrap()
-        }
+        ProviderEntry::L1(provider) => handle_request!(provider, L1ChainSpec),
+        ProviderEntry::Op(provider) => handle_request!(provider, OpChainSpec),
+        ProviderEntry::Generic(provider) => handle_request!(provider, GenericChainSpec),
+        ProviderEntry::Injective(provider) => handle_request!(provider, InjectiveChainSpec),
+        ProviderEntry::Arc(provider) => handle_request!(provider, ArcChainSpec),
+        ProviderEntry::Arb(provider) => handle_request!(provider, ArbChainSpec),
+        ProviderEntry::Ape(provider) => handle_request!(provider, ApeChainSpec),
+        ProviderEntry::Tempo(provider) => handle_request!(provider, TempoChainSpec),
     }
 }
 
@@ -2011,6 +1905,7 @@ pub fn provider_set_verbose_tracing(id: u32, enabled: u8) {
             ProviderEntry::Op(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Generic(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Injective(p) => p.set_verbose_tracing(enabled != 0),
+            ProviderEntry::Arc(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Arb(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Ape(p) => p.set_verbose_tracing(enabled != 0),
             ProviderEntry::Tempo(p) => p.set_verbose_tracing(enabled != 0),

@@ -154,6 +154,7 @@ where
             observability: value.observability,
             owned_accounts: value.owned_accounts,
             precompile_overrides: value.precompile_overrides,
+            resolve_hardfork_at_fork: false,
             transaction_gas_cap,
         })
     }

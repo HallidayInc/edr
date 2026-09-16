@@ -459,12 +459,12 @@ fn injective_bank_gas(inputs: &CallInputs, calldata_len: usize, base_gas: u64) -
         .unwrap_or(u64::MAX)
         .saturating_mul(INJECTIVE_WRITE_COST_PER_BYTE);
     let required_gas = base_gas.saturating_add(calldata_gas);
-    let mut gas = Gas::new(inputs.gas_limit);
+    let mut gas = gas_for_inputs(inputs);
     gas.record_regular_cost(required_gas).then_some(gas)
 }
 
 fn injective_bank_out_of_gas(inputs: &CallInputs) -> InterpreterResult {
-    let mut gas = Gas::new(inputs.gas_limit);
+    let mut gas = gas_for_inputs(inputs);
     gas.spend_all();
     InterpreterResult {
         result: InstructionResult::PrecompileOOG,
@@ -1550,7 +1550,7 @@ where
 }
 
 fn success(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
-    success_with_gas(Gas::new(inputs.gas_limit), output)
+    success_with_gas(gas_for_inputs(inputs), output)
 }
 
 fn success_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
@@ -1570,7 +1570,11 @@ fn revert_with_message_and_gas(gas: Gas, message: &str) -> InterpreterResult {
 }
 
 fn revert(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
-    revert_with_gas(Gas::new(inputs.gas_limit), output)
+    revert_with_gas(gas_for_inputs(inputs), output)
+}
+
+fn gas_for_inputs(inputs: &CallInputs) -> Gas {
+    Gas::new_with_regular_gas_and_reservoir(inputs.gas_limit, inputs.reservoir)
 }
 
 fn revert_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {

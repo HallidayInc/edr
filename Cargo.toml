@@ -265,6 +265,11 @@ c-kzg = { version = "2.1.4", default-features = false, features = [
 revm-inspectors = { version = "0.41.1", features = ["serde"] }
 foundry-fork-db = "0.27"
 
+## Arc
+arc-evm = { git = "https://github.com/HallidayInc/arc-node", rev = "de3e3d42ecd6ca05b776c31ce63576fbe57edbe5", default-features = false }
+arc-execution-config = { git = "https://github.com/HallidayInc/arc-node", rev = "de3e3d42ecd6ca05b776c31ce63576fbe57edbe5", default-features = false }
+arc-precompiles = { git = "https://github.com/HallidayInc/arc-node", rev = "de3e3d42ecd6ca05b776c31ce63576fbe57edbe5", default-features = false }
+
 ## Tempo
 tempo-hardfork = { git = "https://github.com/tempoxyz/tempo", rev = "5ec0336812e683efa511a9e41cdd43b7e73a5eaa", default-features = false, features = [
     "serde",
@@ -362,6 +367,7 @@ proptest = "1.7.0"
 regex = { version = "1", default-features = false, features = ["unicode-perl"] }
 semver = { version = "1.0.28", default-features = false }
 sha2 = { version = "0.10.9", default-features = false }
+slh-dsa = "0.2.0-rc.5"
 sha3 = { version = "0.10.8", default-features = false }
 similar-asserts = "1.7"
 rand = "0.9"

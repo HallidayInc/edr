@@ -5,15 +5,13 @@ pub mod builder;
 use std::ops::Deref;
 
 use alloy_rlp::BufMut;
-use edr_chain_spec::{ContextChainSpec, EvmSpecId, HardforkChainSpec};
+use edr_chain_spec::EvmSpecId;
 use edr_chain_spec_receipt::ReceiptConstructor;
 use edr_primitives::{Address, Bloom, B256};
 use edr_receipt::{
     log::FilterLog, AsExecutionReceipt, ExecutionReceipt, ReceiptTrait, RootOrStatus,
     TransactionReceipt,
 };
-
-use crate::L1ChainSpec;
 
 /// Type for a receipt that's included in a block.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,18 +78,19 @@ impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>> ExecutionReceipt
     }
 }
 
-impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>, SignedTransactionT>
-    ReceiptConstructor<SignedTransactionT> for L1BlockReceipt<ExecutionReceiptT>
+impl<
+        ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>,
+        SignedTransactionT,
+        HardforkT: Into<EvmSpecId>,
+        ContextT,
+    > ReceiptConstructor<SignedTransactionT, HardforkT, ContextT>
+    for L1BlockReceipt<ExecutionReceiptT>
 {
-    type Context = <L1ChainSpec as ContextChainSpec>::Context;
-
     type ExecutionReceipt = ExecutionReceiptT;
 
-    type Hardfork = <L1ChainSpec as HardforkChainSpec>::Hardfork;
-
     fn new_receipt(
-        _context: &Self::Context,
-        hardfork: Self::Hardfork,
+        _context: &ContextT,
+        hardfork: HardforkT,
         _transaction: &SignedTransactionT,
         mut transaction_receipt: TransactionReceipt<Self::ExecutionReceipt>,
         block_hash: &B256,
@@ -99,7 +98,7 @@ impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>, SignedTransactionT>
     ) -> Self {
         // The JSON-RPC layer should not return the gas price as effective gas price for
         // receipts in pre-London hardforks.
-        if hardfork < EvmSpecId::LONDON {
+        if hardfork.into() < EvmSpecId::LONDON {
             transaction_receipt.effective_gas_price = None;
         }
 

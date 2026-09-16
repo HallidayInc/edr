@@ -222,6 +222,7 @@ pub struct ProviderConfig<HardforkT> {
     pub observability: ObservabilityConfig,
     pub owned_accounts: Vec<k256::SecretKey>,
     pub precompile_overrides: HashMap<Address, PrecompileFn>,
+    pub resolve_hardfork_at_fork: bool,
     /// Transaction gas cap, introduced in [EIP-7825].
     ///
     /// When not set, enforcement of the transaction gas cap is disabled and

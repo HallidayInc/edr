@@ -438,6 +438,7 @@ impl_from_rpc_type!(crate::GenericChainSpec);
 impl_from_rpc_type!(crate::ArbChainSpec);
 impl_from_rpc_type!(crate::ApeChainSpec);
 impl_from_rpc_type!(crate::InjectiveChainSpec);
+impl_from_rpc_type!(crate::ArcChainSpec);
 impl_from_rpc_type!(crate::TempoChainSpec);
 
 impl<TimerT: Clone + TimeSinceEpoch> FromRpcType<TempoCallRequest, TimerT>

@@ -44,13 +44,12 @@ impl TryFrom<TempoRpcTransaction> for TempoSignedTransaction {
 }
 
 impl<BlockT: Block<TempoSignedTransaction>>
-    RpcTypeFrom<TransactionAndBlock<BlockT, TempoSignedTransaction>> for TempoRpcTransaction
+    RpcTypeFrom<TransactionAndBlock<BlockT, TempoSignedTransaction>, TempoHardfork>
+    for TempoRpcTransaction
 {
-    type Hardfork = TempoHardfork;
-
     fn rpc_type_from(
         value: &TransactionAndBlock<BlockT, TempoSignedTransaction>,
-        _hardfork: Self::Hardfork,
+        _hardfork: TempoHardfork,
     ) -> Self {
         let (block_hash, block_number, transaction_index, block_timestamp, base_fee) = value
             .block_data

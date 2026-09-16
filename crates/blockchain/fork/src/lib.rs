@@ -149,6 +149,29 @@ pub enum ForkedBlockchainError<HardforkT, RpcBlockConversionErrorT, RpcReceiptCo
     },
 }
 
+pub type HardforkResolver<HardforkT> =
+    fn(&HardforkActivations<HardforkT>, u64, u64) -> Option<HardforkT>;
+
+fn local_hardfork<HardforkT: Clone>(
+    configured: HardforkT,
+    remote: Option<&HardforkT>,
+    resolve_at_fork: bool,
+) -> HardforkT {
+    if resolve_at_fork {
+        remote.cloned().unwrap_or(configured)
+    } else {
+        configured
+    }
+}
+
+fn default_hardfork_resolver<HardforkT: Clone>(
+    activations: &HardforkActivations<HardforkT>,
+    block_number: u64,
+    timestamp: u64,
+) -> Option<HardforkT> {
+    activations.hardfork_at_block(block_number, timestamp)
+}
+
 /// A blockchain that forked from a remote blockchain.
 #[derive_where(Debug; BlockT, HardforkT, LocalBlockT)]
 pub struct ForkedBlockchain<
@@ -168,6 +191,7 @@ pub struct ForkedBlockchain<
     fork_block_number: u64,
     hardfork: HardforkT,
     hardfork_activations: Option<HardforkActivations<HardforkT>>,
+    hardfork_resolver: HardforkResolver<HardforkT>,
     local_storage: ReservableSparseBlockStorage<
         Arc<BlockReceiptT>,
         Arc<LocalBlockT>,
@@ -274,6 +298,39 @@ impl<
         chain_id_override: Option<u64>,
         storage_resolver: Option<RemoteStorageResolver>,
     ) -> Result<Self, ForkedBlockchainCreationError<HardforkT>> {
+        Self::new_with_hardfork_selection(
+            hardfork,
+            runtime,
+            rpc_client,
+            irregular_state,
+            state_root_generator,
+            chain_configs,
+            fork_block_number,
+            chain_id_override,
+            storage_resolver,
+            default_hardfork_resolver,
+            false,
+        )
+        .await
+    }
+
+    /// Constructs a fork with chain-specific activation resolution. When requested,
+    /// the resolved remote hardfork also selects local successor execution.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn new_with_hardfork_selection(
+        hardfork: HardforkT,
+        runtime: runtime::Handle,
+        rpc_client: Arc<EthRpcClient<RpcBlockChainSpecT, RpcReceiptT, RpcTransactionT>>,
+        irregular_state: &mut IrregularState,
+        state_root_generator: Arc<Mutex<RandomHashGenerator>>,
+        chain_configs: &HashMap<ChainId, ChainConfig<HardforkT>>,
+        fork_block_number: Option<u64>,
+        chain_id_override: Option<u64>,
+        storage_resolver: Option<RemoteStorageResolver>,
+        hardfork_resolver: HardforkResolver<HardforkT>,
+        resolve_hardfork_at_fork: bool,
+    ) -> Result<Self, ForkedBlockchainCreationError<HardforkT>> {
         let ForkMetadata {
             chain_id: remote_chain_id,
             network_id,
@@ -333,13 +390,14 @@ impl<
             .expect("Block must exist since block number is less than the latest block number.")
             .timestamp();
 
-        if let Some(remote_hardfork) =
-            hardfork_activations
-                .as_ref()
-                .and_then(|hardfork_activations| {
-                    hardfork_activations.hardfork_at_block(fork_block_number, fork_timestamp)
-                })
-        {
+        let remote_hardfork = hardfork_activations
+            .as_ref()
+            .and_then(|hardfork_activations| {
+                hardfork_resolver(hardfork_activations, fork_block_number, fork_timestamp)
+            });
+        let hardfork = local_hardfork(hardfork, remote_hardfork.as_ref(), resolve_hardfork_at_fork);
+
+        if let Some(remote_hardfork) = remote_hardfork {
             let remote_evm_spec_id = remote_hardfork.clone().into();
             if remote_evm_spec_id < EvmSpecId::SPURIOUS_DRAGON {
                 return Err(ForkedBlockchainCreationError::InvalidHardfork {
@@ -416,6 +474,7 @@ impl<
             network_id,
             hardfork,
             hardfork_activations,
+            hardfork_resolver,
             storage_resolver,
             _phantom: PhantomData,
         })
@@ -569,8 +628,7 @@ impl<
             .and_then(|block| {
                 if let Some(hardfork_activations) = &self.hardfork_activations {
                     let header = block.block_header();
-                    hardfork_activations
-                        .hardfork_at_block(header.number, header.timestamp)
+                    (self.hardfork_resolver)(hardfork_activations, header.number, header.timestamp)
                         .ok_or(ForkedBlockchainError::UnknownBlockSpec {
                             block_number,
                             hardfork_activations: hardfork_activations.clone(),
@@ -1258,5 +1316,11 @@ mod tests {
             latest_block_number: LATEST_BLOCK_NUMBER,
         };
         assert_eq!(recommended_fork_block_number(args), LATEST_BLOCK_NUMBER);
+    }
+
+    #[test]
+    fn local_hardfork_can_follow_the_resolved_fork_block() {
+        assert_eq!(local_hardfork(3, Some(&4), true), 4);
+        assert_eq!(local_hardfork(3, Some(&4), false), 3);
     }
 }

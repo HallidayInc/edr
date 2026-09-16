@@ -226,9 +226,9 @@ impl<
         'builder,
         BlockReceiptT: ReceiptConstructor<
                 ChainSpecT::SignedTransaction,
-                Context = ChainSpecT::Context,
+                ChainSpecT::Hardfork,
+                ChainSpecT::Context,
                 ExecutionReceipt = ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
-                Hardfork = ChainSpecT::Hardfork,
             > + ReceiptTrait,
         BlockT: ?Sized + Block<ChainSpecT::SignedTransaction>,
         BlockchainErrorT: Debug + 'static + std::error::Error + Send + Sync,
@@ -280,7 +280,7 @@ impl<
             ChainSpecT::SignedTransaction,
         >,
         block_config: &'builder BlockConfig<ChainSpecT::Hardfork>,
-        state: Box<dyn DynState>,
+        mut state: Box<dyn DynState>,
         evm_config: &EvmConfig,
         inputs: BlockInputs,
         mut overrides: HeaderOverrides<ChainSpecT::Hardfork>,
@@ -307,7 +307,7 @@ impl<
         }
 
         let parent_header = parent_block.block_header();
-        let parent_gas_limit = if overrides.gas_limit.is_none() {
+        let mut parent_gas_limit = if overrides.gas_limit.is_none() {
             Some(parent_header.gas_limit)
         } else {
             None
@@ -316,13 +316,41 @@ impl<
         overrides.parent_hash = Some(*parent_block.block_hash());
 
         let cfg = evm_config.to_cfg_env(hardfork);
-        let header = PartialHeader::new(
+        let base_fee_overridden = overrides.base_fee.is_some();
+        let mut header = PartialHeader::new(
             block_config,
             overrides,
             Some(parent_header),
             &inputs.ommers,
             inputs.withdrawals.as_ref(),
         );
+
+        let changes = ChainSpecT::prepare_block(
+            HeaderAndEvmSpec::new_block_env(
+                &header,
+                hardfork.into(),
+                block_config.scheduled_blob_params.as_ref(),
+            ),
+            cfg.clone(),
+            parent_header,
+            WrapDatabaseRef(DatabaseComponents {
+                blockchain,
+                state: state.as_mut(),
+                native_token_mirror: None,
+            }),
+        )
+        .map_err(BlockBuilderCreationError::InvalidBlock)?;
+        if let Some(gas_limit) = changes.gas_limit {
+            header.gas_limit = gas_limit;
+            parent_gas_limit = None;
+        }
+        if !base_fee_overridden && let Some(base_fee) = changes.base_fee {
+            header.base_fee = Some(base_fee);
+        }
+        if let Some(extra_data) = changes.extra_data {
+            header.extra_data = extra_data;
+        }
+        let state_diff = StateDiff::from(changes.state);
 
         let precompile_addresses = {
             #[allow(clippy::type_complexity)]
@@ -349,7 +377,9 @@ impl<
                 ChainSpecT::new_precompile_provider(hardfork),
                 custom_precompiles.clone(),
             );
-            precompile_provider.into_addresses()
+            let mut addresses = precompile_provider.into_addresses();
+            addresses.extend(ChainSpecT::cold_precompile_addresses(hardfork));
+            addresses
         };
 
         Ok(Self {
@@ -361,7 +391,7 @@ impl<
             parent_gas_limit,
             receipts: Vec::new(),
             state,
-            state_diff: StateDiff::default(),
+            state_diff,
             transactions: Vec::new(),
             transaction_results: Vec::new(),
             withdrawals: inputs.withdrawals,
@@ -580,9 +610,9 @@ impl<
         'builder,
         BlockReceiptT: ReceiptConstructor<
                 ChainSpecT::SignedTransaction,
-                Context = ChainSpecT::Context,
+                ChainSpecT::Hardfork,
+                ChainSpecT::Context,
                 ExecutionReceipt = ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
-                Hardfork = ChainSpecT::Hardfork,
             > + ReceiptTrait
             + alloy_rlp::Encodable,
         BlockT: ?Sized + Block<ChainSpecT::SignedTransaction>,
@@ -631,6 +661,34 @@ impl<
         BuiltBlockAndStateWithMetadata<LocalBlockT, ChainSpecT::HaltReason>,
         BlockFinalizeError<StateError>,
     > {
+        let changes = ChainSpecT::finish_block(
+            HeaderAndEvmSpec::new_block_env(
+                &self.header,
+                self.cfg.spec.into(),
+                self.block_config.scheduled_blob_params.as_ref(),
+            ),
+            self.cfg.clone(),
+            self.header.gas_used,
+            WrapDatabaseRef(DatabaseComponents {
+                blockchain: self.blockchain,
+                state: self.state.as_ref(),
+                native_token_mirror: None,
+            }),
+        )
+        .map_err(BlockFinalizeError::Protocol)?;
+        if let Some(gas_limit) = changes.gas_limit {
+            self.header.gas_limit = gas_limit;
+            self.parent_gas_limit = None;
+        }
+        if let Some(base_fee) = changes.base_fee {
+            self.header.base_fee = Some(base_fee);
+        }
+        if let Some(extra_data) = changes.extra_data {
+            self.header.extra_data = extra_data;
+        }
+        self.state_diff.apply_diff(changes.state.clone());
+        self.state.commit(changes.state);
+
         for (address, reward) in rewards {
             if reward > 0 {
                 let account_info = self
@@ -695,7 +753,7 @@ impl<
         );
 
         // TODO: handle ommers
-        let block = EthLocalBlock::new::<ExecutionReceiptChainSpecT>(
+        let block = EthLocalBlock::new::<ExecutionReceiptChainSpecT, _>(
             &self.context,
             self.cfg.spec,
             self.header,
@@ -729,9 +787,9 @@ impl<
         'builder,
         BlockReceiptT: ReceiptConstructor<
                 ChainSpecT::SignedTransaction,
-                Context = ChainSpecT::Context,
+                ChainSpecT::Hardfork,
+                ChainSpecT::Context,
                 ExecutionReceipt = ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
-                Hardfork = ChainSpecT::Hardfork,
             > + ReceiptTrait
             + alloy_rlp::Encodable,
         BlockT: ?Sized + Block<ChainSpecT::SignedTransaction>,

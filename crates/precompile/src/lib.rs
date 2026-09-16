@@ -121,7 +121,8 @@ impl<
     }
 
     fn contains(&self, address: &Address) -> bool {
-        self.unique_addresses.contains(address)
+        // Providers may resolve precompiles dynamically without warming them.
+        self.custom_precompiles.contains_key(address) || self.base.contains(address)
     }
 }
 

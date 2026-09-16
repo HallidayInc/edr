@@ -317,14 +317,12 @@ impl RpcTransaction for L1RpcTransactionWithSignature {
 }
 
 impl<BlockT: Block<L1SignedTransaction>>
-    RpcTypeFrom<TransactionAndBlock<BlockT, L1SignedTransaction>>
+    RpcTypeFrom<TransactionAndBlock<BlockT, L1SignedTransaction>, Hardfork>
     for L1RpcTransactionWithSignature
 {
-    type Hardfork = Hardfork;
-
     fn rpc_type_from(
         value: &TransactionAndBlock<BlockT, L1SignedTransaction>,
-        hardfork: Self::Hardfork,
+        hardfork: Hardfork,
     ) -> Self {
         let (header, transaction_index) = value
             .block_data

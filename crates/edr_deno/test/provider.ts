@@ -8,19 +8,9 @@ import { Context, Provider } from "../edr/mod.ts";
 hashes.sha256 ??= sha256;
 hashes.hmacSha256 ??= (key, message) => hmac(sha256, key, message);
 
+// Explicitly pin the head for RPCs whose retained state is shorter than EDR's default fork depth.
 async function fetchRecentBlockNumber(url: string): Promise<bigint> {
-    const response = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-            id: 1,
-            jsonrpc: "2.0",
-            method: "eth_blockNumber",
-            params: [],
-        }),
-    });
-    const json = await response.json();
-    return BigInt(json.result);
+    return BigInt(await rpcRequest(url, { method: "eth_blockNumber", params: [] }));
 }
 
 async function rpcRequest(url: string, req: { method: string, params: any[] }) {
@@ -503,6 +493,37 @@ Deno.test("story fork eth_call", async () => {
     await request(arb, { method: "evm_mine", params: [] });
 });
 
+Deno.test("Arc zero8 fork replays remote execution and mines its successor", async () => {
+    const block_number = 60_260_900n;
+    const tx_hash = "0x28f406832b94cebca542a66436599bd3762a5654c5d21531e88c3318f982509a";
+
+    using ctx = new Context();
+    using arc = ctx.createProvider({
+        chain: "arc",
+        chainId: 5_042_002n,
+        networkId: 5_042_002n,
+        hardfork: "zero8",
+        fork: {
+            jsonRpcUrl: "https://rpc.testnet.arc.io/",
+            blockNumber: block_number,
+        },
+    });
+
+    const trace = await request(arc, {
+        method: "debug_traceTransaction",
+        params: [tx_hash],
+    });
+    assertEquals(trace.failed, false);
+
+    await request(arc, { method: "evm_mine", params: [] });
+    const successor = await request(arc, {
+        method: "eth_getBlockByNumber",
+        params: ["latest", false],
+    });
+    assertEquals(BigInt(successor.number), block_number + 1n);
+    assertEquals(successor.extraData.length, 18);
+});
+
 Deno.test("sepolia fork block number", async () => {
     using ctx = new Context();
     using sepolia = ctx.createProvider({
@@ -669,6 +690,7 @@ Deno.test("arbitrum fork ArbInfo precompile mirrors standard account queries", a
 });
 
 Deno.test("stable native token mirror links real ERC20 storage to native balances", async () => {
+    const rpcUrl = "https://rpc.stable.xyz";
     const token = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736";
     const account = "0x000000000000000000000000000000000000bEEF";
     const recipient = "0x000000000000000000000000000000000000dEaD";
@@ -684,7 +706,7 @@ Deno.test("stable native token mirror links real ERC20 storage to native balance
         chain: "generic",
         chainId: 988n,
         networkId: 988n,
-        fork: { jsonRpcUrl: "https://rpc.stable.xyz" },
+        fork: { jsonRpcUrl: rpcUrl, blockNumber: await fetchRecentBlockNumber(rpcUrl) },
         nativeTokenMirror: {
             token,
             decimals: 6,
@@ -894,7 +916,7 @@ Deno.test("Injective fork resolves native USDC supply at the fork block", async 
     using ctx = new Context();
     using provider = ctx.createProvider({
         chain: "injective",
-        fork: { jsonRpcUrl: rpcUrl },
+        fork: { jsonRpcUrl: rpcUrl, blockNumber: await fetchRecentBlockNumber(rpcUrl) },
     });
 
     const forkBlock = await request(provider, {
@@ -1085,6 +1107,7 @@ Deno.test("Tempo estimate includes explicit fee-token execution", async () => {
 });
 
 Deno.test("stable native token mirror lets storage-funded account spend native balance", async () => {
+    const rpcUrl = "https://rpc.stable.xyz";
     const token = "0x779Ded0c9e1022225f8E0630b35a9b54bE713736";
     const account = "0x000000000000000000000000000000000000c0De";
     const recipient = "0x000000000000000000000000000000000000dEaD";
@@ -1098,7 +1121,7 @@ Deno.test("stable native token mirror lets storage-funded account spend native b
         chain: "generic",
         chainId: 988n,
         networkId: 988n,
-        fork: { jsonRpcUrl: "https://rpc.stable.xyz" },
+        fork: { jsonRpcUrl: rpcUrl, blockNumber: await fetchRecentBlockNumber(rpcUrl) },
         nativeTokenMirror: {
             token,
             decimals: 6,

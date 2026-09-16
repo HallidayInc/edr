@@ -84,16 +84,13 @@ impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>> ExecutionReceipt
 }
 
 impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>>
-    ReceiptConstructor<transaction::TempoSignedTransaction>
+    ReceiptConstructor<transaction::TempoSignedTransaction, tempo_hardfork::TempoHardfork, ()>
     for TempoBlockReceipt<ExecutionReceiptT>
 {
-    type Context = ();
     type ExecutionReceipt = ExecutionReceiptT;
-    type Hardfork = tempo_hardfork::TempoHardfork;
-
     fn new_receipt(
-        _context: &Self::Context,
-        _hardfork: Self::Hardfork,
+        _context: &(),
+        _hardfork: tempo_hardfork::TempoHardfork,
         transaction: &transaction::TempoSignedTransaction,
         transaction_receipt: TransactionReceipt<Self::ExecutionReceipt>,
         block_hash: &B256,
@@ -166,10 +163,10 @@ impl<ExecutionReceiptT: ExecutionReceipt<Log = FilterLog>> ReceiptTrait
     }
 }
 
-impl
+impl<HardforkT: Into<EvmSpecId>>
     ExecutionReceiptBuilder<
         edr_chain_l1::HaltReason,
-        edr_chain_l1::Hardfork,
+        HardforkT,
         transaction::SignedTransactionWithFallbackToPostEip155,
     > for GenericExecutionReceiptBuilder
 {
@@ -186,14 +183,14 @@ impl
         self,
         transaction: &crate::transaction::SignedTransactionWithFallbackToPostEip155,
         result: &ExecutionResult<edr_chain_l1::HaltReason>,
-        hardfork: edr_chain_l1::Hardfork,
+        hardfork: HardforkT,
         cumulative_gas_used: u64,
         state_root: B256,
     ) -> Self::Receipt {
         let logs = result.logs().to_vec();
         let logs_bloom = logs_to_bloom(&logs);
 
-        let receipt = if hardfork >= EvmSpecId::BYZANTIUM {
+        let receipt = if hardfork.into() >= EvmSpecId::BYZANTIUM {
             edr_receipt::execution::Eip658 {
                 status: result.is_success(),
                 cumulative_gas_used,

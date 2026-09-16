@@ -37,6 +37,9 @@ pub enum BlockBuilderCreationError<DatabaseErrorT, HardforkT> {
     /// Unsupported hardfork. Hardforks older than Byzantium are not supported
     #[error("Unsupported hardfork: {0:?}. Hardforks older than Byzantium are not supported.")]
     UnsupportedHardfork(HardforkT),
+    /// The proposed block violates a chain-specific protocol rule.
+    #[error("Invalid block: {0}")]
+    InvalidBlock(String),
 }
 
 /// Chain-agnostic inputs for building a block.
@@ -69,6 +72,9 @@ impl BlockInputs {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BlockFinalizeError<StateErrorT> {
+    /// Chain-specific protocol execution failed.
+    #[error("Block protocol execution failed: {0}")]
+    Protocol(String),
     /// Maximum block RLP size exceeded (EIP-7934).
     #[error(
         "Maximum block RLP size exceeded. Maximum: {max_size} bytes. Actual: {actual_size} bytes"

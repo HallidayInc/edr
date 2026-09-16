@@ -104,6 +104,7 @@ pub fn dry_run<
         custom_precompiles.clone(),
     );
 
+    let cold_precompiles = EvmChainSpecT::cold_precompile_addresses(cfg.spec);
     let result = EvmChainSpecT::dry_run(
         block,
         cfg,
@@ -113,10 +114,9 @@ pub fn dry_run<
         native_token_mirror.cloned(),
     )?;
 
-    Ok(ExecutionResultAndStateWithMetadata::new(
-        result,
-        precompile_provider.into_addresses(),
-    ))
+    let mut addresses = precompile_provider.into_addresses();
+    addresses.extend(cold_precompiles);
+    Ok(ExecutionResultAndStateWithMetadata::new(result, addresses))
 }
 
 /// Runs a transaction while observing with an inspector, without committing the
@@ -168,6 +168,7 @@ pub fn dry_run_with_inspector<
         custom_precompiles.clone(),
     );
 
+    let cold_precompiles = EvmChainSpecT::cold_precompile_addresses(cfg.spec);
     let result = EvmChainSpecT::dry_run_with_inspector(
         block,
         cfg,
@@ -178,10 +179,9 @@ pub fn dry_run_with_inspector<
         native_token_mirror.cloned(),
     )?;
 
-    Ok(ExecutionResultAndStateWithMetadata::new(
-        result,
-        precompile_provider.into_addresses(),
-    ))
+    let mut addresses = precompile_provider.into_addresses();
+    addresses.extend(cold_precompiles);
+    Ok(ExecutionResultAndStateWithMetadata::new(result, addresses))
 }
 
 /// Runs a transaction without committing the state, while disabling balance

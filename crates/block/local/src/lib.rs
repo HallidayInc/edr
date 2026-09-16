@@ -45,9 +45,7 @@ pub struct EthLocalBlock<
 }
 
 impl<
-        BlockReceiptT: ReceiptConstructor<SignedTransactionT, Context = ContextT, Hardfork = HardforkT>
-            + ReceiptTrait,
-        ContextT,
+        BlockReceiptT: ReceiptTrait,
         FetchReceiptErrorT,
         HardforkT: Clone,
         SignedTransactionT: ExecutableTransaction,
@@ -56,12 +54,13 @@ impl<
     /// Constructs a new instance with the provided data.
     pub fn new<
         ExecutionReceiptChainSpecT: ExecutionReceiptChainSpec<
-                ExecutionReceipt<ExecutionLog>: MapReceiptLogs<
-                    ExecutionLog,
-                    FilterLog,
-                    ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
-                >,
-            > + ExecutionReceiptChainSpec<ExecutionReceipt<FilterLog> = BlockReceiptT::ExecutionReceipt>,
+            ExecutionReceipt<ExecutionLog>: MapReceiptLogs<
+                ExecutionLog,
+                FilterLog,
+                ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
+            >,
+        >,
+        ContextT,
     >(
         context: &ContextT,
         hardfork: HardforkT,
@@ -72,7 +71,15 @@ impl<
         >,
         ommers: Vec<BlockHeader>,
         withdrawals: Option<Vec<Withdrawal>>,
-    ) -> Self {
+    ) -> Self
+    where
+        BlockReceiptT: ReceiptConstructor<
+            SignedTransactionT,
+            HardforkT,
+            ContextT,
+            ExecutionReceipt = ExecutionReceiptChainSpecT::ExecutionReceipt<FilterLog>,
+        >,
+    {
         let ommer_hashes = ommers.iter().map(BlockHeader::hash).collect::<Vec<_>>();
         // `rlp_encoding()` already returns the transaction's EIP-2718 consensus
         // encoding, so it's the trie value as-is — re-encoding it would double-wrap.
