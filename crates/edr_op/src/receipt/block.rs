@@ -65,16 +65,14 @@ impl ExecutionReceipt for OpBlockReceipt {
     }
 }
 
-impl ReceiptConstructor<OpSignedTransaction> for OpBlockReceipt {
-    type Context = <OpChainSpec as ContextChainSpec>::Context;
-
+impl ReceiptConstructor<OpSignedTransaction, Hardfork, <OpChainSpec as ContextChainSpec>::Context>
+    for OpBlockReceipt
+{
     type ExecutionReceipt = TypedEnvelope<OpExecutionReceipt<FilterLog>>;
 
-    type Hardfork = Hardfork;
-
     fn new_receipt(
-        context: &Self::Context,
-        hardfork: Self::Hardfork,
+        context: &<OpChainSpec as ContextChainSpec>::Context,
+        hardfork: Hardfork,
         transaction: &OpSignedTransaction,
         transaction_receipt: edr_receipt::TransactionReceipt<Self::ExecutionReceipt>,
         block_hash: &B256,
@@ -86,7 +84,7 @@ impl ReceiptConstructor<OpSignedTransaction> for OpBlockReceipt {
         let eth = {
             L1BlockReceipt::new_receipt(
                 &edr_mirror::MirrorContext::new(None),
-                hardfork.into(),
+                edr_chain_spec::EvmSpecId::from(hardfork),
                 transaction,
                 transaction_receipt,
                 block_hash,

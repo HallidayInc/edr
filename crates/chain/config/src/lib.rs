@@ -41,6 +41,10 @@ impl<HardforkT> HardforkActivations<HardforkT> {
         self.hardforks
     }
 
+    pub fn as_slice(&self) -> &[HardforkActivation<HardforkT>] {
+        &self.hardforks
+    }
+
     /// Creates a new instance for a new chain with the provided hardfork.
     pub fn with_spec_id(hardfork: HardforkT) -> Self {
         Self {

@@ -23,6 +23,19 @@ pub use crate::{interpreter::InterpreterResult, result::ExecutionResultAndState}
 pub type ContextForChainSpec<ChainSpecT, BlockEnvT, DatabaseT> =
     <ChainSpecT as EvmChainSpec>::EvmContext<BlockEnvT, DatabaseT>;
 
+/// Protocol changes made outside user transactions when building a block.
+#[derive(Default)]
+pub struct BlockChanges {
+    /// State writes to commit and retain in the block diff.
+    pub state: edr_state_api::EvmState,
+    /// Protocol gas limit, overriding the inherited parent limit.
+    pub gas_limit: Option<u64>,
+    /// Protocol base fee; an explicit development override takes precedence.
+    pub base_fee: Option<u128>,
+    /// Protocol metadata for the resulting block header.
+    pub extra_data: Option<edr_primitives::Bytes>,
+}
+
 /// Trait for specifying the types for running a transaction in a chain's
 /// associated EVM.
 pub trait EvmChainSpec:
@@ -52,6 +65,35 @@ pub trait EvmChainSpec:
     fn new_precompile_provider<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
         hardfork: Self::Hardfork,
     ) -> Self::PrecompileProvider<BlockT, DatabaseT>;
+
+    /// Additional precompiles for trace classification, without warming them in the EVM.
+    fn cold_precompile_addresses(_hardfork: Self::Hardfork) -> &'static [edr_primitives::Address] {
+        &[]
+    }
+
+    /// Execute and commit protocol pre-block changes, returning the committed
+    /// state diff and header changes.
+    fn prepare_block<
+        BlockT: BlockEnvTrait,
+        DatabaseT: Database + edr_state_api::StateCommit + core::fmt::Debug,
+    >(
+        _block: BlockT,
+        _cfg: CfgEnv<Self::Hardfork>,
+        _parent: &edr_block_header::BlockHeader,
+        _database: DatabaseT,
+    ) -> Result<BlockChanges, String> {
+        Ok(BlockChanges::default())
+    }
+
+    /// Execute protocol post-block accounting and return state/header changes.
+    fn finish_block<BlockT: BlockEnvTrait, DatabaseT: Database + core::fmt::Debug>(
+        _block: BlockT,
+        _cfg: CfgEnv<Self::Hardfork>,
+        _gas_used: u64,
+        _database: DatabaseT,
+    ) -> Result<BlockChanges, String> {
+        Ok(BlockChanges::default())
+    }
 
     /// Runs a transaction inside the chain's EVM without committing the
     /// changes.

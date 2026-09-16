@@ -95,10 +95,11 @@ impl<
         subscriber_callback: Box<
             dyn SyncSubscriberCallback<ChainSpecT::Block, ChainSpecT::SignedTransaction>,
         >,
-        config: ProviderConfig<<ChainSpecT as HardforkChainSpec>::Hardfork>,
+        mut config: ProviderConfig<<ChainSpecT as HardforkChainSpec>::Hardfork>,
         contract_decoder: Arc<RwLock<ContractDecoder>>,
         timer: TimerT,
     ) -> Result<Self, CreationErrorForChainSpec<ChainSpecT>> {
+        config.hardfork = ChainSpecT::normalize_hardfork(config.hardfork);
         let data = ProviderData::new(
             runtime.clone(),
             logger,

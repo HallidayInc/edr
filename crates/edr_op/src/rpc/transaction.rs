@@ -130,13 +130,11 @@ impl TryFrom<Transaction> for OpSignedTransaction {
 }
 
 impl<BlockT: Block<OpSignedTransaction>>
-    RpcTypeFrom<TransactionAndBlock<BlockT, OpSignedTransaction>> for Transaction
+    RpcTypeFrom<TransactionAndBlock<BlockT, OpSignedTransaction>, Hardfork> for Transaction
 {
-    type Hardfork = Hardfork;
-
     fn rpc_type_from(
         value: &TransactionAndBlock<BlockT, OpSignedTransaction>,
-        hardfork: Self::Hardfork,
+        hardfork: Hardfork,
     ) -> Self {
         let (header, transaction_index) = value
             .block_data

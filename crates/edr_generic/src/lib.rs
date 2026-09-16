@@ -3,6 +3,9 @@
 use edr_primitives::{address, Address};
 pub use tempo_hardfork::TempoHardfork;
 
+mod arc_evm;
+mod arc_hardfork;
+mod arc_spec;
 mod eip2718;
 mod injective_spec;
 mod precompiles;
@@ -24,6 +27,8 @@ pub const APE_CHAIN_TYPE: &str = "ape";
 pub const TEMPO_CHAIN_TYPE: &str = "tempo";
 /// Injective chain type.
 pub const INJECTIVE_CHAIN_TYPE: &str = "injective";
+/// Arc chain type.
+pub const ARC_CHAIN_TYPE: &str = "arc";
 /// Backing account used for Ape-specific precompile state.
 pub const APE_PRECOMPILE_STATE_ADDRESS: Address =
     address!("00000000000000000000000000000000A4E50000");
@@ -56,6 +61,12 @@ pub struct ApeChainSpec;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct InjectiveChainSpec;
 
+/// Chain specification for Circle's Arc L1 (native USDC gas with system precompiles).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
+pub struct ArcChainSpec;
+
+pub use arc_hardfork::{ArcFeatures, ArcHardfork};
+
 /// Chain specification backed by Tempo's native execution crates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, alloy_rlp::RlpEncodable)]
 pub struct TempoChainSpec;
@@ -66,6 +77,7 @@ impl GenericChainSpecFamily for GenericChainSpec {}
 impl GenericChainSpecFamily for ArbChainSpec {}
 impl GenericChainSpecFamily for ApeChainSpec {}
 impl GenericChainSpecFamily for InjectiveChainSpec {}
+impl GenericChainSpecFamily for ArcChainSpec {}
 impl GenericChainSpecFamily for TempoChainSpec {}
 
 impl edr_utils::GasEstimateAdjuster for GenericChainSpec {
@@ -95,6 +107,12 @@ impl edr_utils::GasEstimateAdjuster for TempoChainSpec {
 }
 
 impl edr_utils::GasEstimateAdjuster for InjectiveChainSpec {
+    fn adjust_estimate_gas(estimate: u64) -> u64 {
+        <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
+    }
+}
+
+impl edr_utils::GasEstimateAdjuster for ArcChainSpec {
     fn adjust_estimate_gas(estimate: u64) -> u64 {
         <GenericChainSpec as edr_utils::GasEstimateAdjuster>::adjust_estimate_gas(estimate)
     }

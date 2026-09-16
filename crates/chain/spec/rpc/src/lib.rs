@@ -58,10 +58,7 @@ pub trait RpcTransaction {
 }
 
 /// Trait for constructing an RPC type from an internal type.
-pub trait RpcTypeFrom<InputT> {
-    /// The hardfork type.
-    type Hardfork;
-
+pub trait RpcTypeFrom<InputT, HardforkT> {
     /// Constructs an RPC type from the provided internal value.
-    fn rpc_type_from(value: &InputT, hardfork: Self::Hardfork) -> Self;
+    fn rpc_type_from(value: &InputT, hardfork: HardforkT) -> Self;
 }

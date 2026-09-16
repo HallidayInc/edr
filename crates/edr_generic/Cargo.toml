@@ -9,11 +9,17 @@ alloy-consensus.workspace = true
 alloy-primitives.workspace = true
 alloy-eips.workspace = true
 alloy-evm.workspace = true
+alloy-hardforks.workspace = true
 alloy-rlp.workspace = true
 alloy-rpc-types = { workspace = true, features = ["eth"] }
 alloy-serde = { workspace = true, features = ["std"] }
 alloy-sol-types.workspace = true
+arc-evm.workspace = true
+arc-execution-config.workspace = true
+arc-precompiles.workspace = true
 edr_block_api.workspace = true
+edr_block_builder_api.workspace = true
+edr_blockchain_api.workspace = true
 edr_block_header.workspace = true
 edr_block_local.workspace = true
 edr_block_remote.workspace = true
@@ -54,6 +60,8 @@ revm-interpreter.workspace = true
 revm-primitives.workspace = true
 
 [dev-dependencies]
+edr_precompile.workspace = true
+slh-dsa.workspace = true
 anyhow = "1.0.89"
 edr_blockchain_api.workspace = true
 edr_defaults.workspace = true

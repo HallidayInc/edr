@@ -1,7 +1,7 @@
 //! Utilities for testing receipts.
 
 // Re-export types that are used in the macros as `$crate::...`
-pub use edr_chain_spec::{ChainSpec, ContextChainSpec};
+pub use edr_chain_spec::{ChainSpec, ContextChainSpec, HardforkChainSpec};
 pub use edr_chain_spec_receipt::{ReceiptChainSpec, ReceiptConstructor};
 pub use edr_chain_spec_rpc::{RpcChainSpec, RpcTypeFrom};
 pub use edr_primitives::{Address, B256};
@@ -69,10 +69,14 @@ macro_rules! impl_execution_receipt_serde_tests {
                     let block_receipt = <
                         <
                             $chain_spec as $crate::ReceiptChainSpec
-                        >::Receipt as $crate::ReceiptConstructor<<$chain_spec as $crate::ChainSpec>::SignedTransaction>
+                        >::Receipt as $crate::ReceiptConstructor<
+                            <$chain_spec as $crate::ChainSpec>::SignedTransaction,
+                            <$chain_spec as $crate::HardforkChainSpec>::Hardfork,
+                            <$chain_spec as $crate::ContextChainSpec>::Context
+                        >
                     >::new_receipt(&context, $hardfork, &transaction, transaction_receipt, &block_hash, block_number);
 
-                    let rpc_receipt = <$chain_spec as $crate::RpcChainSpec>::RpcReceipt::rpc_type_from(&block_receipt, Default::default());
+                    let rpc_receipt = <$chain_spec as $crate::RpcChainSpec>::RpcReceipt::rpc_type_from(&block_receipt, <$chain_spec as $crate::HardforkChainSpec>::Hardfork::default());
 
                     let serialized = serde_json::to_string(&rpc_receipt)?;
                     let deserialized = serde_json::from_str(&serialized)?;

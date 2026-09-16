@@ -78,14 +78,12 @@ pub struct L1RpcTransactionReceipt {
     pub authorization_list: Option<Vec<edr_eip7702::SignedAuthorization>>,
 }
 
-impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>>
+impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>, Hardfork>
     for L1RpcTransactionReceipt
 {
-    type Hardfork = Hardfork;
-
     fn rpc_type_from(
         value: &L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
-        hardfork: Self::Hardfork,
+        hardfork: Hardfork,
     ) -> Self {
         let transaction_type = if hardfork >= Hardfork::BERLIN {
             Some(u8::from(value.inner.transaction_type()))
@@ -120,14 +118,12 @@ impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>
     }
 }
 
-impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::execution::Eip658<FilterLog>>>>
+impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::execution::Eip658<FilterLog>>>, Hardfork>
     for L1RpcTransactionReceipt
 {
-    type Hardfork = Hardfork;
-
     fn rpc_type_from(
         value: &L1BlockReceipt<TypedEnvelope<edr_receipt::execution::Eip658<FilterLog>>>,
-        hardfork: Self::Hardfork,
+        hardfork: Hardfork,
     ) -> Self {
         let transaction_type = if hardfork >= Hardfork::BERLIN {
             Some(u8::from(value.inner.transaction_type()))

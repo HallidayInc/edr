@@ -123,16 +123,15 @@ impl TryFrom<GenericRpcTransactionReceipt>
     }
 }
 
-impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>>
+impl<HardforkT: Into<edr_chain_l1::Hardfork>>
+    RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>, HardforkT>
     for GenericRpcTransactionReceipt
 {
-    type Hardfork = edr_chain_l1::Hardfork;
-
     fn rpc_type_from(
         value: &L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
-        hardfork: Self::Hardfork,
+        hardfork: HardforkT,
     ) -> Self {
-        let transaction_type = if hardfork >= edr_chain_l1::Hardfork::BERLIN {
+        let transaction_type = if hardfork.into() >= edr_chain_l1::Hardfork::BERLIN {
             Some(u8::from(value.inner.transaction_type()))
         } else {
             None
@@ -165,14 +164,15 @@ impl RpcTypeFrom<L1BlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>
     }
 }
 
-impl RpcTypeFrom<TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>>
-    for TempoRpcTransactionReceipt
+impl
+    RpcTypeFrom<
+        TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
+        tempo_hardfork::TempoHardfork,
+    > for TempoRpcTransactionReceipt
 {
-    type Hardfork = tempo_hardfork::TempoHardfork;
-
     fn rpc_type_from(
         value: &TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
-        _hardfork: Self::Hardfork,
+        _hardfork: tempo_hardfork::TempoHardfork,
     ) -> Self {
         let receipt = L1BlockReceipt {
             inner: value.inner.clone(),

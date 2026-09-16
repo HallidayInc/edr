@@ -503,6 +503,37 @@ Deno.test("story fork eth_call", async () => {
     await request(arb, { method: "evm_mine", params: [] });
 });
 
+Deno.test("Arc zero8 fork replays remote execution and mines its successor", async () => {
+    const block_number = 60_260_900n;
+    const tx_hash = "0x28f406832b94cebca542a66436599bd3762a5654c5d21531e88c3318f982509a";
+
+    using ctx = new Context();
+    using arc = ctx.createProvider({
+        chain: "arc",
+        chainId: 5_042_002n,
+        networkId: 5_042_002n,
+        hardfork: "zero8",
+        fork: {
+            jsonRpcUrl: "https://rpc.testnet.arc.io/",
+            blockNumber: block_number,
+        },
+    });
+
+    const trace = await request(arc, {
+        method: "debug_traceTransaction",
+        params: [tx_hash],
+    });
+    assertEquals(trace.failed, false);
+
+    await request(arc, { method: "evm_mine", params: [] });
+    const successor = await request(arc, {
+        method: "eth_getBlockByNumber",
+        params: ["latest", false],
+    });
+    assertEquals(BigInt(successor.number), block_number + 1n);
+    assertEquals(successor.extraData.length, 18);
+});
+
 Deno.test("sepolia fork block number", async () => {
     using ctx = new Context();
     using sepolia = ctx.createProvider({

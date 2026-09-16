@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use edr_block_api::{EthBlockData, FetchBlockReceipts};
 use edr_block_header::BlockHeader;
-use edr_chain_config::ChainConfig;
+use edr_chain_config::{ChainConfig, HardforkActivations};
 use edr_chain_spec::TransactionValidation;
 use edr_chain_spec_block::{BlockChainSpec, SyncBlockChainSpec};
 use edr_chain_spec_receipt::ReceiptChainSpec;
@@ -22,11 +22,11 @@ pub trait ProviderChainSpec: BlockChainSpec<
                         + FetchBlockReceipts<Arc<<Self as ReceiptChainSpec>::Receipt>, Error: Debug>,
         Receipt: 'static + TryFrom<<Self as RpcChainSpec>::RpcReceipt, Error: Send + Sync>,
         RpcBlock<B256>: RpcEthBlock,
-        RpcReceipt: RpcTypeFrom<Self::Receipt, Hardfork = Self::Hardfork>,
+        RpcReceipt: RpcTypeFrom<Self::Receipt, Self::Hardfork>,
         RpcTransaction: RpcTransaction
                             + RpcTypeFrom<
             TransactionAndBlock<Arc<Self::Block>, Self::SignedTransaction>,
-            Hardfork = Self::Hardfork,
+            Self::Hardfork,
         >,
         SignedTransaction: 'static
                                + Clone
@@ -46,6 +46,18 @@ pub trait ProviderChainSpec: BlockChainSpec<
 
     /// Returns the chain configurations for this chain type.
     fn chain_configs() -> &'static HashMap<u64, ChainConfig<Self::Hardfork>>;
+
+    fn resolve_hardfork(
+        activations: &HardforkActivations<Self::Hardfork>,
+        block_number: u64,
+        timestamp: u64,
+    ) -> Option<Self::Hardfork> {
+        activations.hardfork_at_block(block_number, timestamp)
+    }
+
+    fn normalize_hardfork(hardfork: Self::Hardfork) -> Self::Hardfork {
+        hardfork
+    }
 
     /// Returns the default base fee params to fallback to for the given spec
     fn default_base_fee_params() -> &'static BaseFeeParams<Self::Hardfork>;

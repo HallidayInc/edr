@@ -28,15 +28,15 @@ impl From<L1RpcTransactionWithSignature> for GenericRpcTransactionWithSignature 
     }
 }
 
-impl<BlockT: Block<SignedTransactionWithFallbackToPostEip155>>
-    RpcTypeFrom<TransactionAndBlock<BlockT, SignedTransactionWithFallbackToPostEip155>>
+impl<
+        BlockT: Block<SignedTransactionWithFallbackToPostEip155>,
+        HardforkT: Into<edr_chain_l1::Hardfork>,
+    > RpcTypeFrom<TransactionAndBlock<BlockT, SignedTransactionWithFallbackToPostEip155>, HardforkT>
     for GenericRpcTransactionWithSignature
 {
-    type Hardfork = edr_chain_l1::Hardfork;
-
     fn rpc_type_from(
         value: &TransactionAndBlock<BlockT, SignedTransactionWithFallbackToPostEip155>,
-        hardfork: Self::Hardfork,
+        hardfork: HardforkT,
     ) -> Self {
         let (header, transaction_index) = value
             .block_data
@@ -54,7 +54,7 @@ impl<BlockT: Block<SignedTransactionWithFallbackToPostEip155>>
             header,
             transaction_index,
             value.is_pending,
-            hardfork,
+            hardfork.into(),
         );
         let signature = value.transaction.signature();
 
