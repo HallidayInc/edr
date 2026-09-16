@@ -37,6 +37,9 @@ pub enum BlockBuilderCreationError<DatabaseErrorT, HardforkT> {
     /// Unsupported hardfork. Hardforks older than Byzantium are not supported
     #[error("Unsupported hardfork: {0:?}. Hardforks older than Byzantium are not supported.")]
     UnsupportedHardfork(HardforkT),
+    /// The proposed block violates a chain-specific protocol rule.
+    #[error("Invalid block: {0}")]
+    InvalidBlock(String),
 }
 
 /// Chain-agnostic inputs for building a block.

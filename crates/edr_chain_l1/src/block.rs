@@ -35,7 +35,9 @@ use edr_receipt::{
     ExecutionReceipt, ExecutionReceiptChainSpec, MapReceiptLogs, ReceiptTrait, TransactionReceipt,
 };
 use edr_receipt_builder_api::ExecutionReceiptBuilder;
-use edr_state_api::{AccountModifierFn, DynState, StateDiff, StateError};
+use edr_state_api::{
+    AccountModifierFn, DynState, EvmStorageSlot, StateDiff, StateError, TransactionId,
+};
 
 const MAX_BLOCK_SIZE: usize = 10_485_760; // 10 MiB
 const SAFETY_MARGIN: usize = 2_097_152; // 2 MiB
@@ -138,6 +140,11 @@ impl<
         &self.header
     }
 
+    /// Retrieves the mutable header for a chain-specific block builder.
+    pub fn header_mut(&mut self) -> &mut PartialHeader {
+        &mut self.header
+    }
+
     /// Retrieves the amount of gas used in the block, so far.
     pub fn gas_used(&self) -> u64 {
         self.header.gas_used
@@ -151,6 +158,25 @@ impl<
     /// Retrieves the state of the block builder.
     pub fn state(&self) -> &dyn DynState {
         self.state.as_ref()
+    }
+
+    /// Applies a protocol-level storage write and records it in the block's
+    /// state diff. This is intended for chain-specific pre/post-block hooks.
+    pub fn set_account_storage_slot(
+        &mut self,
+        address: Address,
+        index: U256,
+        value: U256,
+    ) -> Result<(), StateError> {
+        let account_info = self.state.basic(address)?;
+        let old_value = self.state.set_account_storage_slot(address, index, value)?;
+        self.state_diff.apply_storage_change(
+            address,
+            index,
+            EvmStorageSlot::new_changed(old_value, value, TransactionId::ZERO),
+            account_info,
+        );
+        Ok(())
     }
 }
 

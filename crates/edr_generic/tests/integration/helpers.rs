@@ -19,15 +19,60 @@ use tokio::runtime;
 pub(crate) fn get_chain_fork_provider<
     ChainSpecT: SyncProviderSpec<
             CurrentTime,
-            Hardfork = edr_chain_l1::Hardfork,
             SignedTransaction: Default + TransactionValidation<ValidationError: PartialEq>,
         > + ProviderSpec<CurrentTime>,
 >(
     chain_id: u64,
     block_number: u64,
-    chain_override: ChainOverride<edr_chain_l1::Hardfork>,
+    chain_override: ChainOverride<ChainSpecT::Hardfork>,
     url: String,
     observability: Option<ObservabilityConfig>,
+) -> anyhow::Result<Provider<ChainSpecT>> {
+    get_chain_fork_provider_inner::<ChainSpecT>(
+        chain_id,
+        block_number,
+        chain_override,
+        url,
+        observability,
+        None,
+    )
+}
+
+#[cfg(feature = "test-remote")]
+pub(crate) fn get_chain_fork_provider_with_hardfork<
+    ChainSpecT: SyncProviderSpec<
+            CurrentTime,
+            SignedTransaction: Default + TransactionValidation<ValidationError: PartialEq>,
+        > + ProviderSpec<CurrentTime>,
+>(
+    chain_id: u64,
+    block_number: u64,
+    chain_override: ChainOverride<ChainSpecT::Hardfork>,
+    url: String,
+    hardfork: ChainSpecT::Hardfork,
+) -> anyhow::Result<Provider<ChainSpecT>> {
+    get_chain_fork_provider_inner::<ChainSpecT>(
+        chain_id,
+        block_number,
+        chain_override,
+        url,
+        None,
+        Some(hardfork),
+    )
+}
+
+fn get_chain_fork_provider_inner<
+    ChainSpecT: SyncProviderSpec<
+            CurrentTime,
+            SignedTransaction: Default + TransactionValidation<ValidationError: PartialEq>,
+        > + ProviderSpec<CurrentTime>,
+>(
+    chain_id: u64,
+    block_number: u64,
+    chain_override: ChainOverride<ChainSpecT::Hardfork>,
+    url: String,
+    observability: Option<ObservabilityConfig>,
+    hardfork: Option<ChainSpecT::Hardfork>,
 ) -> anyhow::Result<Provider<ChainSpecT>> {
     let logger = Box::new(NoopLogger::<ChainSpecT>::default());
     let subscriber = Box::new(|_event| {});
@@ -46,10 +91,13 @@ pub(crate) fn get_chain_fork_provider<
         config.with_observability(observability_config);
     }
 
-    let config = ProviderConfig {
+    let mut config = ProviderConfig {
         chain_id,
         ..create_test_config_with(config)
     };
+    if let Some(hardfork) = hardfork {
+        config.hardfork = hardfork;
+    }
 
     Ok(Provider::new(
         runtime::Handle::current(),

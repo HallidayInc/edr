@@ -38,6 +38,7 @@ use edr_chain_spec::{
 use edr_chain_spec_block::BlockChainSpec;
 use edr_chain_spec_evm::{config::EvmConfig, result::ExecutionResult, CfgEnv};
 use edr_eip1559::BaseFeeParams;
+use edr_eip7825::transaction_gas_cap_for_hardfork;
 use edr_eip7892::ScheduledBlobParams;
 use edr_eth::{
     block::miner_reward,
@@ -726,7 +727,7 @@ where
             // Used by `create_blockchain_and_state`
             chain_id: _chain_id,
             coinbase: beneficiary,
-            default_transaction_gas_limit,
+            mut default_transaction_gas_limit,
             gas_estimation_mode,
             // Used by `create_blockchain_and_state`
             genesis_state: _genesis_state,
@@ -751,8 +752,18 @@ where
             observability,
             owned_accounts,
             precompile_overrides,
-            transaction_gas_cap,
+            resolve_hardfork_at_fork,
+            mut transaction_gas_cap,
         } = config;
+
+        if resolve_hardfork_at_fork && fork_metadata.is_some() {
+            transaction_gas_cap = transaction_gas_cap_for_hardfork(block_config.hardfork);
+            if let Some(transaction_gas_cap) = transaction_gas_cap {
+                default_transaction_gas_limit =
+                    NonZeroU64::new(default_transaction_gas_limit.get().min(transaction_gas_cap))
+                        .expect("transaction gas cap must be non-zero");
+            }
+        }
 
         let local_accounts = owned_accounts
             .iter()
@@ -3037,7 +3048,7 @@ fn create_forked_blockchain_and_state<
         )
     });
 
-    let block_config = BlockConfig {
+    let mut block_config = BlockConfig {
         base_fee_params,
         hardfork: config.hardfork,
         min_ethash_difficulty: ChainSpecT::MIN_ETHASH_DIFFICULTY,
@@ -3047,22 +3058,42 @@ fn create_forked_blockchain_and_state<
     let (blockchain, mut irregular_state) =
         tokio::task::block_in_place(|| -> Result<_, ForkedCreationError<ChainSpecT::Hardfork>> {
             let mut irregular_state = IrregularState::default();
-            let blockchain = runtime.block_on(
-                ForkedBlockchainForChainSpec::<ChainSpecT>::new_with_storage_resolver(
-                    block_config.hardfork,
-                    runtime.clone(),
-                    rpc_client.clone(),
-                    &mut irregular_state,
-                    state_root_generator.clone(),
-                    &chain_configs,
-                    fork_config.block_number,
-                    Some(config.chain_id),
-                    ChainSpecT::remote_storage_resolver(),
-                ),
-            )?;
+            let blockchain = if config.resolve_hardfork_at_fork {
+                runtime.block_on(
+                    ForkedBlockchainForChainSpec::<ChainSpecT>::new_resolving_hardfork_at_fork(
+                        block_config.hardfork,
+                        runtime.clone(),
+                        rpc_client.clone(),
+                        &mut irregular_state,
+                        state_root_generator.clone(),
+                        &chain_configs,
+                        fork_config.block_number,
+                        Some(config.chain_id),
+                        ChainSpecT::remote_storage_resolver(),
+                        ChainSpecT::resolve_hardfork,
+                    ),
+                )
+            } else {
+                runtime.block_on(
+                    ForkedBlockchainForChainSpec::<ChainSpecT>::new_with_hardfork_resolver(
+                        block_config.hardfork,
+                        runtime.clone(),
+                        rpc_client.clone(),
+                        &mut irregular_state,
+                        state_root_generator.clone(),
+                        &chain_configs,
+                        fork_config.block_number,
+                        Some(config.chain_id),
+                        ChainSpecT::remote_storage_resolver(),
+                        ChainSpecT::resolve_hardfork,
+                    ),
+                )
+            }?;
 
             Ok((blockchain, irregular_state))
         })?;
+
+    block_config.hardfork = blockchain.hardfork();
 
     let fork_block_number = blockchain.last_block_number();
 
@@ -3152,7 +3183,7 @@ fn create_forked_blockchain_and_state<
             .expect("Elapsed time since fork block must be representable as i64")
     };
 
-    let next_block_base_fee_per_gas = if config.hardfork.into() >= EvmSpecId::LONDON {
+    let next_block_base_fee_per_gas = if block_config.hardfork.into() >= EvmSpecId::LONDON {
         if let Some(base_fee) = config.initial_base_fee_per_gas {
             Some(base_fee)
         } else {

@@ -5,7 +5,7 @@ use edr_receipt::{log::FilterLog, AsExecutionReceipt as _};
 use serde::{Deserialize, Serialize};
 
 use crate::eip2718::TypedEnvelope;
-use crate::receipt::TempoBlockReceipt;
+use crate::receipt::{ArcBlockReceipt, TempoBlockReceipt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
@@ -25,6 +25,25 @@ use edr_transaction::TransactionType;
 // even though we use our own TypedEnvelope.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenericRpcTransactionReceipt(L1RpcTransactionReceipt);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ArcRpcTransactionReceipt(GenericRpcTransactionReceipt);
+
+impl TryFrom<ArcRpcTransactionReceipt>
+    for ArcBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>
+{
+    type Error = ConversionError;
+
+    fn try_from(value: ArcRpcTransactionReceipt) -> Result<Self, Self::Error> {
+        let receipt: L1BlockReceipt<_> = value.0.try_into()?;
+        Ok(Self {
+            inner: receipt.inner,
+            block_hash: receipt.block_hash,
+            block_number: receipt.block_number,
+        })
+    }
+}
 
 /// Tempo receipt representation with its chain-specific fee metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,5 +206,26 @@ impl RpcTypeFrom<TempoBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLo
             fee_token: value.fee_token,
             fee_payer: value.fee_payer,
         }
+    }
+}
+
+impl RpcTypeFrom<ArcBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>>
+    for ArcRpcTransactionReceipt
+{
+    type Hardfork = crate::ArcHardfork;
+
+    fn rpc_type_from(
+        value: &ArcBlockReceipt<TypedEnvelope<edr_receipt::Execution<FilterLog>>>,
+        hardfork: Self::Hardfork,
+    ) -> Self {
+        let receipt = L1BlockReceipt {
+            inner: value.inner.clone(),
+            block_hash: value.block_hash,
+            block_number: value.block_number,
+        };
+        Self(GenericRpcTransactionReceipt::rpc_type_from(
+            &receipt,
+            hardfork.into(),
+        ))
     }
 }

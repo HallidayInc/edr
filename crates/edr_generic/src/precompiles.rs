@@ -5,10 +5,14 @@ use edr_chain_spec_evm::{
 };
 use edr_primitives::{address, keccak256, Address, Bytes, B256, U256};
 use edr_state_remote::RemoteStorageCall;
-use revm_context_interface::{journaled_state::account::JournaledAccountTr, Cfg, Transaction as _};
-use revm_handler::PrecompileProvider;
+use revm_context_interface::{
+    journaled_state::{account::JournaledAccountTr, JournalLoadErasedError},
+    Cfg, Transaction as _,
+};
+use revm_handler::{PrecompileProvider, SYSTEM_ADDRESS};
 use revm_interpreter::{CallInputs, Gas, InstructionResult};
 use revm_primitives::AddressSet;
+use slh_dsa::{signature::Verifier, Sha2_128s, Signature, VerifyingKey};
 
 use crate::{
     APE_APY_SLOT, APE_PRECOMPILE_STATE_ADDRESS, APE_SHARE_COUNT_SLOT, APE_SHARE_PRICE_SLOT,
@@ -21,6 +25,36 @@ const INJECTIVE_BANK_READ_GAS: u64 = 10_000;
 const INJECTIVE_BANK_TRANSFER_GAS: u64 = 150_000;
 const INJECTIVE_BANK_MINT_BURN_GAS: u64 = 200_000;
 const INJECTIVE_WRITE_COST_PER_BYTE: u64 = 30;
+const ARC_NATIVE_COIN_AUTHORITY_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000000");
+pub(crate) const ARC_NATIVE_COIN_CONTROL_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000001");
+pub(crate) const ARC_SYSTEM_ACCOUNTING_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000002");
+pub(crate) const ARC_CALL_FROM_ADDRESS: Address =
+    address!("1800000000000000000000000000000000000003");
+const ARC_PQ_ADDRESS: Address = address!("1800000000000000000000000000000000000004");
+const ARC_NATIVE_FIAT_TOKEN_ADDRESS: Address = address!("3600000000000000000000000000000000000000");
+pub(crate) const ARC_PROTOCOL_CONFIG_ADDRESS: Address =
+    address!("3600000000000000000000000000000000000001");
+pub(crate) const ARC_PROTOCOL_CONFIG_FEE_PARAMS_SLOT: U256 = U256::from_be_bytes(
+    alloy_primitives::hex!("668f09ce856848ead6cb1ddee963f15ef833cea8958030868f867aec84385200"),
+);
+const ARC_TOTAL_SUPPLY_SLOT: u64 = 2;
+const ARC_BLOCKLIST_SLOT: u64 = 2;
+const ARC_GAS_VALUES_SLOT: u64 = 1;
+const ARC_GAS_VALUES_RING_SIZE: u64 = 64;
+const ARC_PQ_BASE_GAS: u64 = 230_000;
+const ARC_PQ_EARLY_REVERT_GAS: u64 = 200;
+const ARC_PQ_KEY_LENGTH: usize = 32;
+const ARC_PQ_SIGNATURE_LENGTH: usize = 7_856;
+const ARC_EARLY_REVERT_GAS: u64 = 200;
+const ARC_CONTROL_SUCCESS_GAS_FLOOR: u64 = 4_025;
+const ARC_ACCOUNT_WRITE_GAS: u64 = 2_900;
+const ARC_EMPTY_ACCOUNT_GAS: u64 = 25_000;
+const ARC_LOG_BASE_GAS: u64 = 375;
+const ARC_LOG_TOPIC_GAS: u64 = 375;
+const ARC_LOG_DATA_GAS: u64 = 8;
 const ARBINFO_ADDRESS: Address = address!("0000000000000000000000000000000000000065");
 const ARBOWNERPUBLIC_ADDRESS: Address = address!("000000000000000000000000000000000000006b");
 const ARBSYS_STATE_ADDRESS: Address = address!("00000000000000000000000000000000A4B05A11");
@@ -35,6 +69,38 @@ sol! {
         function transfer(address sender, address recipient, uint256 amount) external payable returns (bool);
         function mint(address actor, uint256 amount) external payable returns (bool);
         function burn(address actor, uint256 amount) external payable returns (bool);
+    }
+
+    interface ArcNativeCoinAuthority {
+        function mint(address to, uint256 amount) external returns (bool);
+        function burn(address from, uint256 amount) external returns (bool);
+        function transfer(address from, address to, uint256 amount) external returns (bool);
+        function totalSupply() external view returns (uint256 supply);
+        event Transfer(address indexed from, address indexed to, uint256 value);
+    }
+
+    interface ArcNativeCoinControl {
+        function blocklist(address account) external returns (bool success);
+        function isBlocklisted(address account) external view returns (bool _isBlocklisted);
+        function unBlocklist(address account) external returns (bool success);
+        event Blocklisted(address indexed account);
+        event UnBlocklisted(address indexed account);
+    }
+
+    struct ArcGasValues {
+        uint64 gasUsed;
+        uint64 gasUsedSmoothed;
+        uint64 nextBaseFee;
+    }
+
+    interface ArcSystemAccounting {
+        function storeGasValues(uint64 blockNumber, ArcGasValues calldata gasValues) external returns (bool);
+        function getGasValues(uint64 blockNumber) external view returns (ArcGasValues memory gasValues);
+    }
+
+    interface ArcPq {
+        function verifySlhDsaSha2128s(bytes calldata vk, bytes calldata message, bytes calldata sig)
+            external returns (bool isValid);
     }
 
     interface ArbInfo {
@@ -133,6 +199,19 @@ use self::{
         sendTxToL1Call, wasMyCallersAddressAliasedCall, withdrawEthCall, InvalidBlockNumber,
         L2ToL1Tx, SendMerkleUpdate,
     },
+    ArcNativeCoinAuthority::{
+        burnCall as arcBurnCall, mintCall as arcMintCall, totalSupplyCall as arcTotalSupplyCall,
+        transferCall as arcTransferCall, Transfer as ArcTransfer,
+    },
+    ArcNativeCoinControl::{
+        blocklistCall as arcBlocklistCall, isBlocklistedCall as arcIsBlocklistedCall,
+        unBlocklistCall as arcUnBlocklistCall, Blocklisted as ArcBlocklisted,
+        UnBlocklisted as ArcUnBlocklisted,
+    },
+    ArcPq::verifySlhDsaSha2128sCall as arcVerifySlhDsaSha2128sCall,
+    ArcSystemAccounting::{
+        getGasValuesCall as arcGetGasValuesCall, storeGasValuesCall as arcStoreGasValuesCall,
+    },
     InjectiveBank::{
         balanceOfCall as bankBalanceOfCall, burnCall as bankBurnCall, mintCall as bankMintCall,
         totalSupplyCall as bankTotalSupplyCall, transferCall as bankTransferCall,
@@ -209,6 +288,1093 @@ where
     fn contains(&self, address: &Address) -> bool {
         *address == INJECTIVE_BANK_ADDRESS || self.inner.contains(address)
     }
+}
+
+/// Arc precompile provider.
+///
+/// This keeps Ethereum's built-in precompiles and adds Circle Arc's system
+/// precompiles: the Native Coin Authority (`0x1800…0000`), which the native
+/// USDC ERC-20 interface at `0x3600…0000` uses to mint, burn and move native
+/// balances, and the Native Coin Control blocklist (`0x1800…0001`).
+#[derive(Debug, Clone)]
+pub struct ArcPrecompiles {
+    inner: EthPrecompiles,
+    warm_addresses: AddressSet,
+    hardfork: crate::ArcHardfork,
+}
+
+impl ArcPrecompiles {
+    pub fn new(hardfork: crate::ArcHardfork) -> Self {
+        let inner = EthPrecompiles::new(hardfork.into());
+        let warm_addresses = Self::warm_addresses_for(&inner, hardfork);
+        Self {
+            inner,
+            warm_addresses,
+            hardfork,
+        }
+    }
+
+    fn warm_addresses_for(inner: &EthPrecompiles, hardfork: crate::ArcHardfork) -> AddressSet {
+        let mut addresses: AddressSet = inner
+            .warm_addresses()
+            .iter()
+            .copied()
+            .chain([
+                ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                ARC_SYSTEM_ACCOUNTING_ADDRESS,
+            ])
+            .collect();
+        if hardfork.is_zero6() {
+            addresses.insert(ARC_PQ_ADDRESS);
+        }
+        if hardfork.is_zero7() {
+            addresses.insert(ARC_CALL_FROM_ADDRESS);
+        }
+        addresses
+    }
+}
+
+impl<ContextT> PrecompileProvider<ContextT> for ArcPrecompiles
+where
+    ContextT: ContextTrait<Cfg: Cfg<Spec = crate::ArcHardfork>>,
+{
+    type Output = InterpreterResult;
+
+    fn set_spec(&mut self, spec: <ContextT::Cfg as Cfg>::Spec) -> bool {
+        let changed = self.hardfork != spec;
+        if changed {
+            self.inner = EthPrecompiles::new(spec.into());
+            self.hardfork = spec;
+            self.warm_addresses = Self::warm_addresses_for(&self.inner, spec);
+        }
+        changed
+    }
+
+    fn run(
+        &mut self,
+        context: &mut ContextT,
+        inputs: &CallInputs,
+    ) -> Result<Option<Self::Output>, String> {
+        if inputs.bytecode_address == ARC_NATIVE_COIN_AUTHORITY_ADDRESS {
+            return run_arc_native_coin_authority(context, inputs, self.hardfork).map(Some);
+        }
+        if inputs.bytecode_address == ARC_NATIVE_COIN_CONTROL_ADDRESS {
+            return run_arc_native_coin_control(context, inputs, self.hardfork).map(Some);
+        }
+        if inputs.bytecode_address == ARC_SYSTEM_ACCOUNTING_ADDRESS {
+            return run_arc_system_accounting(context, inputs, self.hardfork).map(Some);
+        }
+        if self.hardfork.is_zero6() && inputs.bytecode_address == ARC_PQ_ADDRESS {
+            return Ok(Some(run_arc_pq(context, inputs)));
+        }
+        if self.hardfork.is_zero7() && inputs.bytecode_address == ARC_CALL_FROM_ADDRESS {
+            return Ok(Some(revert_with_message(inputs, "unauthorized caller")));
+        }
+
+        self.inner.run(context, inputs)
+    }
+
+    fn warm_addresses(&self) -> &AddressSet {
+        &self.warm_addresses
+    }
+
+    fn contains(&self, address: &Address) -> bool {
+        *address == ARC_NATIVE_COIN_AUTHORITY_ADDRESS
+            || *address == ARC_NATIVE_COIN_CONTROL_ADDRESS
+            || *address == ARC_SYSTEM_ACCOUNTING_ADDRESS
+            || (self.hardfork.is_zero7() && *address == ARC_CALL_FROM_ADDRESS)
+            || (self.hardfork.is_zero6() && *address == ARC_PQ_ADDRESS)
+            || self.inner.contains(address)
+    }
+}
+
+fn arc_gas(inputs: &CallInputs, required_gas: u64) -> Option<Gas> {
+    let mut gas = gas_for_inputs(inputs);
+    gas.record_regular_cost(required_gas).then_some(gas)
+}
+
+fn arc_out_of_gas(inputs: &CallInputs) -> InterpreterResult {
+    InterpreterResult {
+        result: InstructionResult::PrecompileOOG,
+        gas: Gas::new_spent_with_reservoir(inputs.gas_limit, inputs.reservoir),
+        output: Bytes::new(),
+    }
+}
+
+#[derive(Debug)]
+enum ArcMeterError {
+    OutOfGas,
+    Database(String),
+}
+
+fn arc_storage_error(error: JournalLoadErasedError) -> ArcMeterError {
+    ArcMeterError::Database(error.unwrap_db_error().to_string())
+}
+
+fn arc_charge(gas: &mut Gas, cost: u64) -> Result<(), ArcMeterError> {
+    gas.record_regular_cost(cost)
+        .then_some(())
+        .ok_or(ArcMeterError::OutOfGas)
+}
+
+fn arc_early_revert(
+    inputs: &CallInputs,
+    mut gas: Gas,
+    _hardfork: crate::ArcHardfork,
+    message: &str,
+) -> InterpreterResult {
+    if arc_charge(&mut gas, ARC_EARLY_REVERT_GAS).is_err() {
+        return arc_out_of_gas(inputs);
+    }
+    revert_with_message_and_gas(gas, message)
+}
+
+fn arc_log_cost(log: &Log) -> u64 {
+    ARC_LOG_BASE_GAS
+        .saturating_add(ARC_LOG_TOPIC_GAS.saturating_mul(log.data.topics().len() as u64))
+        .saturating_add(ARC_LOG_DATA_GAS.saturating_mul(log.data.data.len() as u64))
+}
+
+fn arc_read_word_metered<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    slot: U256,
+    gas: &mut Gas,
+) -> Result<U256, ArcMeterError>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    match account.data.sload(slot, true) {
+        Ok(value) => {
+            arc_charge(gas, revm_interpreter::gas::WARM_STORAGE_READ_COST)?;
+            Ok(value.data.present_value())
+        }
+        Err(error) if error.is_cold_load_skipped() => {
+            arc_charge(gas, revm_interpreter::gas::COLD_SLOAD_COST)?;
+            account
+                .data
+                .sload(slot, false)
+                .map(|value| value.data.present_value())
+                .map_err(arc_storage_error)
+        }
+        Err(error) => Err(arc_storage_error(error)),
+    }
+}
+
+fn arc_write_word_metered<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    slot: U256,
+    value: U256,
+    gas: &mut Gas,
+) -> Result<(), ArcMeterError>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    if gas.remaining() <= revm_interpreter::gas::CALL_STIPEND {
+        return Err(ArcMeterError::OutOfGas);
+    }
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    let (original, present) = match account.data.sload(slot, true) {
+        Ok(stored) => (stored.data.original_value(), stored.data.present_value()),
+        Err(error) if error.is_cold_load_skipped() => {
+            arc_charge(gas, revm_interpreter::gas::COLD_SLOAD_COST)?;
+            let stored = account.data.sload(slot, false).map_err(arc_storage_error)?;
+            (stored.data.original_value(), stored.data.present_value())
+        }
+        Err(error) => return Err(arc_storage_error(error)),
+    };
+    let base = if value == present {
+        revm_interpreter::gas::WARM_STORAGE_READ_COST
+    } else if original == present {
+        if original.is_zero() {
+            revm_interpreter::gas::SSTORE_SET
+        } else {
+            revm_interpreter::gas::WARM_SSTORE_RESET
+        }
+    } else {
+        revm_interpreter::gas::WARM_STORAGE_READ_COST
+    };
+    arc_charge(gas, base)?;
+    account.data.touch();
+    if account.data.nonce() == 0 {
+        account.data.set_nonce(1);
+    }
+    account
+        .data
+        .sstore(slot, value, false)
+        .map(|_| ())
+        .map_err(arc_storage_error)
+}
+
+fn arc_meter_result<T>(
+    inputs: &CallInputs,
+    result: Result<T, ArcMeterError>,
+) -> Result<Result<T, InterpreterResult>, String> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(ArcMeterError::OutOfGas) => Ok(Err(arc_out_of_gas(inputs))),
+        Err(ArcMeterError::Database(error)) => Err(error),
+    }
+}
+
+fn arc_total_supply_slot() -> U256 {
+    U256::from(ARC_TOTAL_SUPPLY_SLOT)
+}
+
+pub(crate) fn arc_gas_values_slot(block_number: u64) -> U256 {
+    let mut input = [0u8; 64];
+    input[24..32].copy_from_slice(&(block_number % ARC_GAS_VALUES_RING_SIZE).to_be_bytes());
+    input[63] = ARC_GAS_VALUES_SLOT as u8;
+    U256::from_be_slice(keccak256(input).as_slice())
+}
+
+fn arc_pack_gas_values(values: ArcGasValues) -> U256 {
+    let mut packed = [0u8; 32];
+    packed[8..16].copy_from_slice(&values.nextBaseFee.to_be_bytes());
+    packed[16..24].copy_from_slice(&values.gasUsedSmoothed.to_be_bytes());
+    packed[24..32].copy_from_slice(&values.gasUsed.to_be_bytes());
+    U256::from_be_bytes(packed)
+}
+
+fn arc_unpack_gas_values(value: U256) -> ArcGasValues {
+    let bytes = value.to_be_bytes::<32>();
+    ArcGasValues {
+        gasUsed: u64::from_be_bytes(bytes[24..32].try_into().expect("eight-byte gas used")),
+        gasUsedSmoothed: u64::from_be_bytes(
+            bytes[16..24]
+                .try_into()
+                .expect("eight-byte smoothed gas used"),
+        ),
+        nextBaseFee: u64::from_be_bytes(bytes[8..16].try_into().expect("eight-byte next base fee")),
+    }
+}
+
+pub(crate) fn arc_pack_gas_values_parts(
+    gas_used: u64,
+    gas_used_smoothed: u64,
+    next_base_fee: u64,
+) -> U256 {
+    arc_pack_gas_values(ArcGasValues {
+        gasUsed: gas_used,
+        gasUsedSmoothed: gas_used_smoothed,
+        nextBaseFee: next_base_fee,
+    })
+}
+
+pub(crate) fn arc_unpack_gas_values_parts(value: U256) -> (u64, u64, u64) {
+    let values = arc_unpack_gas_values(value);
+    (values.gasUsed, values.gasUsedSmoothed, values.nextBaseFee)
+}
+
+fn run_arc_system_accounting<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+    hardfork: crate::ArcHardfork,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    if calldata.len() < 4 {
+        return Ok(arc_early_revert(
+            inputs,
+            gas_for_inputs(inputs),
+            hardfork,
+            "Execution reverted",
+        ));
+    }
+
+    if calldata.starts_with(&arcGetGasValuesCall::SELECTOR) {
+        let Ok(call) = arcGetGasValuesCall::abi_decode(&calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas_for_inputs(inputs),
+                hardfork,
+                "Execution reverted",
+            ));
+        };
+        let mut gas = gas_for_inputs(inputs);
+        let value = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_SYSTEM_ACCOUNTING_ADDRESS,
+                arc_gas_values_slot(call.blockNumber),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        };
+        return Ok(success_with_gas(
+            gas,
+            arc_unpack_gas_values(value).abi_encode(),
+        ));
+    }
+
+    if calldata.starts_with(&arcStoreGasValuesCall::SELECTOR) {
+        let mut gas = gas_for_inputs(inputs);
+        if inputs.is_static {
+            gas.spend_all();
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "State change during static call",
+            ));
+        }
+        let Ok(call) = arcStoreGasValuesCall::abi_decode(&calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Execution reverted",
+            ));
+        };
+        if inputs.caller != SYSTEM_ADDRESS {
+            return Ok(arc_early_revert(inputs, gas, hardfork, "Invalid caller"));
+        }
+        if inputs.target_address != ARC_SYSTEM_ACCOUNTING_ADDRESS
+            || inputs.bytecode_address != ARC_SYSTEM_ACCOUNTING_ADDRESS
+        {
+            return Ok(if hardfork.is_zero8() {
+                arc_early_revert(inputs, gas, hardfork, "Delegate call not allowed")
+            } else {
+                revert_with_message_and_gas(gas, "Delegate call not allowed")
+            });
+        }
+        if let Err(result) = arc_meter_result(
+            inputs,
+            arc_write_word_metered(
+                context,
+                ARC_SYSTEM_ACCOUNTING_ADDRESS,
+                arc_gas_values_slot(call.blockNumber),
+                arc_pack_gas_values(call.gasValues),
+                &mut gas,
+            ),
+        )? {
+            return Ok(result);
+        }
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    Ok(arc_early_revert(
+        inputs,
+        gas_for_inputs(inputs),
+        hardfork,
+        "Execution reverted",
+    ))
+}
+
+fn run_arc_pq<ContextT>(context: &ContextT, inputs: &CallInputs) -> InterpreterResult
+where
+    ContextT: ContextTrait,
+{
+    let calldata = inputs.input.bytes(context);
+    if calldata.len() < 4 || !calldata.starts_with(&arcVerifySlhDsaSha2128sCall::SELECTOR) {
+        let Some(gas) = arc_gas(inputs, ARC_PQ_EARLY_REVERT_GAS) else {
+            return arc_out_of_gas(inputs);
+        };
+        return revert_with_message_and_gas(gas, "Invalid selector");
+    }
+    let Ok(call) = arcVerifySlhDsaSha2128sCall::abi_decode(&calldata) else {
+        let Some(gas) = arc_gas(inputs, ARC_PQ_EARLY_REVERT_GAS) else {
+            return arc_out_of_gas(inputs);
+        };
+        return revert_with_message_and_gas(gas, "Execution reverted");
+    };
+
+    let mut gas = gas_for_inputs(inputs);
+    let message_gas = u64::try_from(call.message.len())
+        .unwrap_or(u64::MAX)
+        .div_ceil(32)
+        .saturating_mul(revm_interpreter::gas::KECCAK256WORD);
+    if !gas.record_regular_cost(ARC_PQ_BASE_GAS.saturating_add(message_gas)) {
+        gas.spend_all();
+        return InterpreterResult {
+            result: InstructionResult::PrecompileOOG,
+            gas,
+            output: Bytes::new(),
+        };
+    }
+    if call.vk.len() != ARC_PQ_KEY_LENGTH {
+        return revert_with_message_and_gas(gas, "Invalid verifying key length");
+    }
+    if call.sig.len() != ARC_PQ_SIGNATURE_LENGTH {
+        return revert_with_message_and_gas(gas, "Invalid signature length");
+    }
+
+    let Ok(key) = VerifyingKey::<Sha2_128s>::try_from(call.vk.as_ref()) else {
+        return revert_with_message_and_gas(gas, "Failed to parse verifying key");
+    };
+    let Ok(signature) = Signature::<Sha2_128s>::try_from(call.sig.as_ref()) else {
+        return revert_with_message_and_gas(gas, "Failed to parse signature");
+    };
+    success_with_gas(
+        gas,
+        key.verify(call.message.as_ref(), &signature)
+            .is_ok()
+            .abi_encode(),
+    )
+}
+
+pub(crate) fn arc_blocklist_slot(account: Address) -> U256 {
+    let mut input = [0u8; 64];
+    input[12..32].copy_from_slice(account.as_slice());
+    input[63] = ARC_BLOCKLIST_SLOT as u8;
+    U256::from_be_slice(keccak256(input).as_slice())
+}
+
+pub(crate) fn arc_transfer_log(from: Address, to: Address, value: U256) -> Log {
+    Log {
+        address: SYSTEM_ADDRESS,
+        data: ArcTransfer { from, to, value }.encode_log_data(),
+    }
+}
+
+fn run_arc_native_coin_control<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+    hardfork: crate::ArcHardfork,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(arc_early_revert(
+            inputs,
+            gas_for_inputs(inputs),
+            hardfork,
+            "Native Coin Control: missing selector",
+        ));
+    }
+
+    let Some(selector) = calldata.first_chunk::<4>() else {
+        unreachable!("calldata length was checked above")
+    };
+    let selector = *selector;
+    let mut gas = gas_for_inputs(inputs);
+
+    if selector == arcIsBlocklistedCall::SELECTOR {
+        let Ok(call) = arcIsBlocklistedCall::abi_decode(calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Control: invalid isBlocklisted calldata",
+            ));
+        };
+
+        let blocked = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(call.account),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value != U256::ZERO,
+            Err(result) => return Ok(result),
+        };
+        return Ok(success_with_gas(gas, blocked.abi_encode()));
+    }
+
+    if selector == arcBlocklistCall::SELECTOR || selector == arcUnBlocklistCall::SELECTOR {
+        if inputs.is_static {
+            gas.spend_all();
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Control: state change during static call",
+            ));
+        }
+        let (account, status) = if selector == arcBlocklistCall::SELECTOR {
+            let Ok(call) = arcBlocklistCall::abi_decode(calldata) else {
+                return Ok(arc_early_revert(
+                    inputs,
+                    gas,
+                    hardfork,
+                    "Native Coin Control: invalid blocklist calldata",
+                ));
+            };
+            (call.account, U256::from(1))
+        } else {
+            let Ok(call) = arcUnBlocklistCall::abi_decode(calldata) else {
+                return Ok(arc_early_revert(
+                    inputs,
+                    gas,
+                    hardfork,
+                    "Native Coin Control: invalid unBlocklist calldata",
+                ));
+            };
+            (call.account, U256::ZERO)
+        };
+
+        if inputs.caller != ARC_NATIVE_FIAT_TOKEN_ADDRESS {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Control: invalid caller",
+            ));
+        }
+        let is_delegate = inputs.target_address != ARC_NATIVE_COIN_CONTROL_ADDRESS
+            || inputs.bytecode_address != ARC_NATIVE_COIN_CONTROL_ADDRESS;
+        if hardfork.is_zero8() && is_delegate {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Control: delegate call not allowed",
+            ));
+        }
+        if gas.remaining() < ARC_CONTROL_SUCCESS_GAS_FLOOR {
+            return Ok(arc_out_of_gas(inputs));
+        }
+        if is_delegate {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Control: delegate call not allowed",
+            ));
+        }
+
+        if let Err(result) = arc_meter_result(
+            inputs,
+            arc_write_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(account),
+                status,
+                &mut gas,
+            ),
+        )? {
+            return Ok(result);
+        }
+        let log = Log {
+            address: ARC_NATIVE_COIN_CONTROL_ADDRESS,
+            data: if status == U256::ZERO {
+                ArcUnBlocklisted { account }.encode_log_data()
+            } else {
+                ArcBlocklisted { account }.encode_log_data()
+            },
+        };
+        if arc_charge(&mut gas, arc_log_cost(&log)).is_err() {
+            return Ok(arc_out_of_gas(inputs));
+        }
+        context.journal_mut().log(log);
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    Ok(arc_early_revert(
+        inputs,
+        gas,
+        hardfork,
+        &format!(
+            "Native Coin Control: unsupported selector 0x{}",
+            alloy_primitives::hex::encode(selector)
+        ),
+    ))
+}
+
+fn run_arc_native_coin_authority<ContextT>(
+    context: &mut ContextT,
+    inputs: &CallInputs,
+    hardfork: crate::ArcHardfork,
+) -> Result<InterpreterResult, String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let calldata = inputs.input.bytes(context);
+    let calldata = calldata.as_ref();
+
+    if calldata.len() < 4 {
+        return Ok(arc_early_revert(
+            inputs,
+            gas_for_inputs(inputs),
+            hardfork,
+            "Native Coin Authority: missing selector",
+        ));
+    }
+
+    let Some(selector) = calldata.first_chunk::<4>() else {
+        unreachable!("calldata length was checked above")
+    };
+    let selector = *selector;
+    let mut gas = gas_for_inputs(inputs);
+
+    arc_keep_alive(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS)?;
+
+    if selector == arcTotalSupplyCall::SELECTOR {
+        let Ok(_call) = arcTotalSupplyCall::abi_decode(calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: invalid totalSupply calldata",
+            ));
+        };
+
+        let total_supply = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+                arc_total_supply_slot(),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        };
+        return Ok(success_with_gas(gas, total_supply.abi_encode()));
+    }
+
+    let is_mutator = selector == arcTransferCall::SELECTOR
+        || selector == arcMintCall::SELECTOR
+        || selector == arcBurnCall::SELECTOR;
+    if is_mutator && inputs.is_static {
+        gas.spend_all();
+        return Ok(revert_with_message_and_gas(
+            gas,
+            "Native Coin Authority: state change during static call",
+        ));
+    }
+
+    if selector == arcTransferCall::SELECTOR {
+        let Ok(call) = arcTransferCall::abi_decode(calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: invalid transfer calldata",
+            ));
+        };
+        if let Some(result) = arc_authority_access(inputs, gas, hardfork) {
+            return Ok(result);
+        }
+        if call.from == Address::ZERO || call.to == Address::ZERO {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+        let from_blocked = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(call.from),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value != U256::ZERO,
+            Err(result) => return Ok(result),
+        };
+        let to_blocked = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(call.to),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value != U256::ZERO,
+            Err(result) => return Ok(result),
+        };
+        if from_blocked || to_blocked {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: blocked address",
+            ));
+        }
+
+        if call.amount != U256::ZERO {
+            if !(match arc_meter_result(
+                inputs,
+                arc_decr_balance_metered(context, call.from, call.amount, &mut gas, hardfork),
+            )? {
+                Ok(value) => value,
+                Err(result) => return Ok(result),
+            }) {
+                return Ok(revert_with_message_and_gas(
+                    gas,
+                    "Native Coin Authority: insufficient funds",
+                ));
+            }
+            if !(match arc_meter_result(
+                inputs,
+                arc_incr_balance_metered(context, call.to, call.amount, &mut gas),
+            )? {
+                Ok(value) => value,
+                Err(result) => return Ok(result),
+            }) {
+                return Ok(revert_with_message_and_gas(
+                    gas,
+                    "Native Coin Authority: balance overflow",
+                ));
+            }
+            if call.from != call.to {
+                let log = arc_transfer_log(call.from, call.to, call.amount);
+                if arc_charge(&mut gas, arc_log_cost(&log)).is_err() {
+                    return Ok(arc_out_of_gas(inputs));
+                }
+                context.journal_mut().log(log);
+            }
+        }
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    if selector == arcMintCall::SELECTOR {
+        let Ok(call) = arcMintCall::abi_decode(calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: invalid mint calldata",
+            ));
+        };
+        if let Some(result) = arc_authority_access(inputs, gas, hardfork) {
+            return Ok(result);
+        }
+        if call.to == Address::ZERO {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+        let blocked = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(call.to),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value != U256::ZERO,
+            Err(result) => return Ok(result),
+        };
+        if blocked {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: blocked address",
+            ));
+        }
+        if call.amount == U256::ZERO {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: zero amount invalid",
+            ));
+        }
+
+        let slot = arc_total_supply_slot();
+        let total_supply = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS, slot, &mut gas),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        };
+        let Some(total_supply) = total_supply.checked_add(call.amount) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: arithmetic overflow",
+            ));
+        };
+        if let Err(result) = arc_meter_result(
+            inputs,
+            arc_write_word_metered(
+                context,
+                ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+                slot,
+                total_supply,
+                &mut gas,
+            ),
+        )? {
+            return Ok(result);
+        }
+        if !(match arc_meter_result(
+            inputs,
+            arc_incr_balance_metered(context, call.to, call.amount, &mut gas),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        }) {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: balance overflow",
+            ));
+        }
+        let log = arc_transfer_log(Address::ZERO, call.to, call.amount);
+        if arc_charge(&mut gas, arc_log_cost(&log)).is_err() {
+            return Ok(arc_out_of_gas(inputs));
+        }
+        context.journal_mut().log(log);
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    if selector == arcBurnCall::SELECTOR {
+        let Ok(call) = arcBurnCall::abi_decode(calldata) else {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: invalid burn calldata",
+            ));
+        };
+        if let Some(result) = arc_authority_access(inputs, gas, hardfork) {
+            return Ok(result);
+        }
+        if call.from == Address::ZERO {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: zero address not allowed",
+            ));
+        }
+        let blocked = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(
+                context,
+                ARC_NATIVE_COIN_CONTROL_ADDRESS,
+                arc_blocklist_slot(call.from),
+                &mut gas,
+            ),
+        )? {
+            Ok(value) => value != U256::ZERO,
+            Err(result) => return Ok(result),
+        };
+        if blocked {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: blocked address",
+            ));
+        }
+        if call.amount == U256::ZERO {
+            return Ok(arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: zero amount invalid",
+            ));
+        }
+
+        let slot = arc_total_supply_slot();
+        let total_supply = match arc_meter_result(
+            inputs,
+            arc_read_word_metered(context, ARC_NATIVE_COIN_AUTHORITY_ADDRESS, slot, &mut gas),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        };
+        let total_supply = total_supply.saturating_sub(call.amount);
+        if !(match arc_meter_result(
+            inputs,
+            arc_decr_balance_metered(context, call.from, call.amount, &mut gas, hardfork),
+        )? {
+            Ok(value) => value,
+            Err(result) => return Ok(result),
+        }) {
+            return Ok(revert_with_message_and_gas(
+                gas,
+                "Native Coin Authority: insufficient funds",
+            ));
+        }
+        if let Err(result) = arc_meter_result(
+            inputs,
+            arc_write_word_metered(
+                context,
+                ARC_NATIVE_COIN_AUTHORITY_ADDRESS,
+                slot,
+                total_supply,
+                &mut gas,
+            ),
+        )? {
+            return Ok(result);
+        }
+        let log = arc_transfer_log(call.from, Address::ZERO, call.amount);
+        if arc_charge(&mut gas, arc_log_cost(&log)).is_err() {
+            return Ok(arc_out_of_gas(inputs));
+        }
+        context.journal_mut().log(log);
+
+        return Ok(success_with_gas(gas, true.abi_encode()));
+    }
+
+    Ok(arc_early_revert(
+        inputs,
+        gas,
+        hardfork,
+        &format!(
+            "Native Coin Authority: unsupported selector 0x{}",
+            alloy_primitives::hex::encode(selector)
+        ),
+    ))
+}
+
+fn arc_authority_access(
+    inputs: &CallInputs,
+    gas: Gas,
+    hardfork: crate::ArcHardfork,
+) -> Option<InterpreterResult> {
+    if inputs.caller != ARC_NATIVE_FIAT_TOKEN_ADDRESS {
+        return Some(arc_early_revert(
+            inputs,
+            gas,
+            hardfork,
+            "Native Coin Authority: invalid caller",
+        ));
+    }
+    if inputs.target_address != ARC_NATIVE_COIN_AUTHORITY_ADDRESS
+        || inputs.bytecode_address != ARC_NATIVE_COIN_AUTHORITY_ADDRESS
+    {
+        return Some(if hardfork.is_zero8() {
+            arc_early_revert(
+                inputs,
+                gas,
+                hardfork,
+                "Native Coin Authority: delegate call not allowed",
+            )
+        } else {
+            revert_with_message_and_gas(gas, "Native Coin Authority: delegate call not allowed")
+        });
+    }
+    None
+}
+
+// The authority holds the total supply in its own storage but has no code,
+// nonce or balance, so EIP-161 clearing would wipe that storage after any call
+// that touches it.
+fn arc_keep_alive<ContextT>(context: &mut ContextT, address: Address) -> Result<(), String>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| error.to_string())?;
+    if account.data.nonce() == 0 {
+        account.data.set_nonce(1);
+    }
+    Ok(())
+}
+
+fn arc_incr_balance_metered<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    amount: U256,
+    gas: &mut Gas,
+) -> Result<bool, ArcMeterError>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let loaded = context
+        .journal_mut()
+        .load_account(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    let is_cold = loaded.is_cold;
+    let is_selfdestructed = loaded.is_selfdestructed();
+    let is_empty = loaded.info.is_empty();
+    let can_increment = loaded.info.balance.checked_add(amount).is_some();
+    arc_charge(
+        gas,
+        if is_cold {
+            revm_interpreter::gas::COLD_ACCOUNT_ACCESS_COST
+        } else {
+            revm_interpreter::gas::WARM_STORAGE_READ_COST
+        },
+    )?;
+    if is_selfdestructed || !can_increment {
+        return Ok(false);
+    }
+    arc_charge(gas, ARC_ACCOUNT_WRITE_GAS)?;
+    if !amount.is_zero() && is_empty {
+        arc_charge(gas, ARC_EMPTY_ACCOUNT_GAS)?;
+    }
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    Ok(account.data.incr_balance(amount))
+}
+
+fn arc_decr_balance_metered<ContextT>(
+    context: &mut ContextT,
+    address: Address,
+    amount: U256,
+    gas: &mut Gas,
+    hardfork: crate::ArcHardfork,
+) -> Result<bool, ArcMeterError>
+where
+    ContextT: ContextTrait,
+    ContextT::Db: Database,
+{
+    let loaded = context
+        .journal_mut()
+        .load_account(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    let is_cold = loaded.is_cold;
+    let info = loaded.info.clone();
+    arc_charge(
+        gas,
+        if is_cold {
+            revm_interpreter::gas::COLD_ACCOUNT_ACCESS_COST
+        } else {
+            revm_interpreter::gas::WARM_STORAGE_READ_COST
+        },
+    )?;
+    let Some(remaining) = info.balance.checked_sub(amount) else {
+        return Ok(false);
+    };
+    if !hardfork.is_zero8()
+        && remaining.is_zero()
+        && info.nonce == 0
+        && (info.code_hash == edr_primitives::KECCAK_EMPTY || info.code_hash == B256::ZERO)
+    {
+        arc_charge(gas, ARC_ACCOUNT_WRITE_GAS)?;
+        return Ok(false);
+    }
+    arc_charge(gas, ARC_ACCOUNT_WRITE_GAS)?;
+    let mut account = context
+        .journal_mut()
+        .load_account_mut(address)
+        .map_err(|error| ArcMeterError::Database(error.to_string()))?;
+    Ok(account.data.decr_balance(amount))
 }
 
 pub(crate) fn injective_remote_storage_call(
@@ -459,12 +1625,12 @@ fn injective_bank_gas(inputs: &CallInputs, calldata_len: usize, base_gas: u64) -
         .unwrap_or(u64::MAX)
         .saturating_mul(INJECTIVE_WRITE_COST_PER_BYTE);
     let required_gas = base_gas.saturating_add(calldata_gas);
-    let mut gas = Gas::new(inputs.gas_limit);
+    let mut gas = gas_for_inputs(inputs);
     gas.record_regular_cost(required_gas).then_some(gas)
 }
 
 fn injective_bank_out_of_gas(inputs: &CallInputs) -> InterpreterResult {
-    let mut gas = Gas::new(inputs.gas_limit);
+    let mut gas = gas_for_inputs(inputs);
     gas.spend_all();
     InterpreterResult {
         result: InstructionResult::PrecompileOOG,
@@ -1550,7 +2716,7 @@ where
 }
 
 fn success(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
-    success_with_gas(Gas::new(inputs.gas_limit), output)
+    success_with_gas(gas_for_inputs(inputs), output)
 }
 
 fn success_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
@@ -1570,7 +2736,11 @@ fn revert_with_message_and_gas(gas: Gas, message: &str) -> InterpreterResult {
 }
 
 fn revert(inputs: &CallInputs, output: Vec<u8>) -> InterpreterResult {
-    revert_with_gas(Gas::new(inputs.gas_limit), output)
+    revert_with_gas(gas_for_inputs(inputs), output)
+}
+
+fn gas_for_inputs(inputs: &CallInputs) -> Gas {
+    Gas::new_with_regular_gas_and_reservoir(inputs.gas_limit, inputs.reservoir)
 }
 
 fn revert_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
@@ -1578,6 +2748,89 @@ fn revert_with_gas(gas: Gas, output: Vec<u8>) -> InterpreterResult {
         result: InstructionResult::Revert,
         gas,
         output: output.into(),
+    }
+}
+
+#[cfg(test)]
+mod arc_tests {
+    use edr_chain_spec::EvmSpecId;
+    use edr_chain_spec_evm::JournalTrait as _;
+    use edr_primitives::{address, b256, U256};
+    use revm_context::{database_interface::EmptyDB, Context, ContextTr as _};
+    use revm_interpreter::Gas;
+
+    use super::{arc_blocklist_slot, arc_read_word_metered, arc_write_word_metered, ArcMeterError};
+
+    #[test]
+    fn blocklist_slot_matches_arc_storage_layout() {
+        let account = address!("D308a07F97db36C338e8FE2AfB09267781d00811");
+        let expected = b256!("c0814ebfa96e99aee5c17f259ae3205e7b664343916807a4a968c9f94e32f89b");
+
+        assert_eq!(
+            arc_blocklist_slot(account),
+            U256::from_be_slice(expected.as_slice())
+        );
+    }
+
+    #[test]
+    fn cold_storage_read_charges_before_access() {
+        let address = address!("1800000000000000000000000000000000000002");
+        let slot = U256::from(1);
+        let mut context: Context = Context::new(EmptyDB::default(), EvmSpecId::OSAKA);
+        context.journal_mut().load_account(address).unwrap();
+
+        let mut insufficient = Gas::new(revm_interpreter::gas::COLD_SLOAD_COST - 1);
+        assert!(matches!(
+            arc_read_word_metered(&mut context, address, slot, &mut insufficient),
+            Err(ArcMeterError::OutOfGas)
+        ));
+
+        let mut warm_only = Gas::new(revm_interpreter::gas::WARM_STORAGE_READ_COST);
+        assert!(matches!(
+            arc_read_word_metered(&mut context, address, slot, &mut warm_only),
+            Err(ArcMeterError::OutOfGas)
+        ));
+
+        let mut exact = Gas::new(revm_interpreter::gas::COLD_SLOAD_COST);
+        assert_eq!(
+            arc_read_word_metered(&mut context, address, slot, &mut exact).unwrap(),
+            U256::ZERO
+        );
+        assert_eq!(exact.remaining(), 0);
+    }
+
+    #[test]
+    fn cold_storage_write_charges_before_mutation() {
+        let address = address!("1800000000000000000000000000000000000002");
+        let slot = U256::from(1);
+        let value = U256::from(1);
+        let exact_cost = revm_interpreter::gas::COLD_SLOAD_COST + revm_interpreter::gas::SSTORE_SET;
+        let mut context: Context = Context::new(EmptyDB::default(), EvmSpecId::OSAKA);
+        context.journal_mut().load_account(address).unwrap();
+
+        let mut insufficient = Gas::new(exact_cost - 1);
+        assert!(matches!(
+            arc_write_word_metered(&mut context, address, slot, value, &mut insufficient),
+            Err(ArcMeterError::OutOfGas)
+        ));
+
+        let mut warm_read = Gas::new(revm_interpreter::gas::WARM_STORAGE_READ_COST);
+        assert_eq!(
+            arc_read_word_metered(&mut context, address, slot, &mut warm_read).unwrap(),
+            U256::ZERO
+        );
+
+        let mut fresh_context: Context = Context::new(EmptyDB::default(), EvmSpecId::OSAKA);
+        fresh_context.journal_mut().load_account(address).unwrap();
+        let mut exact = Gas::new(exact_cost);
+        arc_write_word_metered(&mut fresh_context, address, slot, value, &mut exact).unwrap();
+        assert_eq!(exact.remaining(), 0);
+
+        let mut warm_read = Gas::new(revm_interpreter::gas::WARM_STORAGE_READ_COST);
+        assert_eq!(
+            arc_read_word_metered(&mut fresh_context, address, slot, &mut warm_read).unwrap(),
+            value
+        );
     }
 }
 

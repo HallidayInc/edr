@@ -16,6 +16,16 @@ use crate::transaction::{self, SignedTransactionWithFallbackToPostEip155};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GenericRpcTransactionWithSignature(L1RpcTransactionWithSignature);
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct ArcRpcTransactionWithSignature(GenericRpcTransactionWithSignature);
+
+impl RpcTransaction for ArcRpcTransactionWithSignature {
+    fn block_hash(&self) -> Option<&B256> {
+        self.0.block_hash()
+    }
+}
+
 impl RpcTransaction for GenericRpcTransactionWithSignature {
     fn block_hash(&self) -> Option<&B256> {
         self.0.block_hash()
@@ -69,6 +79,23 @@ impl<BlockT: Block<SignedTransactionWithFallbackToPostEip155>>
     }
 }
 
+impl<BlockT: Block<SignedTransactionWithFallbackToPostEip155>>
+    RpcTypeFrom<TransactionAndBlock<BlockT, SignedTransactionWithFallbackToPostEip155>>
+    for ArcRpcTransactionWithSignature
+{
+    type Hardfork = crate::ArcHardfork;
+
+    fn rpc_type_from(
+        value: &TransactionAndBlock<BlockT, SignedTransactionWithFallbackToPostEip155>,
+        hardfork: Self::Hardfork,
+    ) -> Self {
+        Self(GenericRpcTransactionWithSignature::rpc_type_from(
+            value,
+            hardfork.into(),
+        ))
+    }
+}
+
 /// Error that occurs when trying to convert the JSON-RPC `Transaction` type.
 pub type GenericRpcTransactionConversionError =
     edr_chain_l1::rpc::transaction::RpcTransactionConversionError;
@@ -119,5 +146,15 @@ impl TryFrom<GenericRpcTransactionWithSignature>
         };
 
         Ok(Self::with_type(transaction, tx_type))
+    }
+}
+
+impl TryFrom<ArcRpcTransactionWithSignature>
+    for transaction::SignedTransactionWithFallbackToPostEip155
+{
+    type Error = GenericRpcTransactionConversionError;
+
+    fn try_from(value: ArcRpcTransactionWithSignature) -> Result<Self, Self::Error> {
+        value.0.try_into()
     }
 }

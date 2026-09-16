@@ -118,9 +118,9 @@ async fn get_fork_state<
         .and_then(|config| config.bpo_hardfork_schedule.clone());
 
     let replay_header = replay_block.block_header();
-    let hardfork = hardfork_activations
-        .hardfork_at_block(block_number, replay_header.timestamp)
-        .ok_or(anyhow!("Unsupported block number"))?;
+    let hardfork =
+        ChainSpecT::resolve_hardfork(&hardfork_activations, block_number, replay_header.timestamp)
+            .ok_or(anyhow!("Unsupported block number"))?;
 
     let base_fee_params = chain_config.as_ref().map_or_else(
         || ChainSpecT::default_base_fee_params(),
@@ -134,7 +134,7 @@ async fn get_fork_state<
         scheduled_blob_params,
     };
 
-    let blockchain = ForkedBlockchain::new(
+    let blockchain = ForkedBlockchain::new_with_hardfork_resolver(
         block_config.hardfork,
         runtime.clone(),
         rpc_client,
@@ -143,6 +143,8 @@ async fn get_fork_state<
         chain_configs,
         Some(block_number - 1),
         Some(chain_id),
+        None,
+        ChainSpecT::resolve_hardfork,
     )
     .await?;
 

@@ -218,9 +218,7 @@ pub fn create_test_config_with<HardforkT: Default>(
                     excess_gas: 0,
                 }),
                 // SAFETY: literal is non-zero
-                genesis_block_gas_limit: unsafe {
-                    NonZeroU64::new_unchecked(30_000_000)
-                },
+                genesis_block_gas_limit: unsafe { NonZeroU64::new_unchecked(30_000_000) },
                 genesis_block_time: Some(SystemTime::now()),
             }
             .into(),
@@ -254,6 +252,7 @@ pub fn create_test_config_with<HardforkT: Default>(
         observability: config.observability.unwrap_or_default(),
         owned_accounts: config.owned_accounts,
         precompile_overrides: HashMap::default(),
+        resolve_hardfork_at_fork: false,
         transaction_gas_cap: None,
     }
 }
